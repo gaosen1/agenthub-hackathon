@@ -69,7 +69,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         .status(400)
         .send({ error: { code: 'ERR_VALIDATION', message: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') } });
     }
-    app.log?.error?.(err);
+    console.error('[hub] unhandled error:', err);
     return reply.status(500).send({ error: { code: 'ERR_STATE', message: 'internal error' } });
   });
 
