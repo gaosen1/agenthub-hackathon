@@ -35,6 +35,7 @@ ops/state/
 # Node.js
 node_modules/
 dist/
+*.tsbuildinfo
 build/
 .next/
 .nuxt/
