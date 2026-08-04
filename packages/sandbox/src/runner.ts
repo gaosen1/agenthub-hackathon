@@ -3,14 +3,14 @@
  * 下载还原 / 打包上传 / 拉起 qwen serve / 路由绑定
  */
 import Fastify from 'fastify';
-import type { HealthzResponse, RunnerMode } from '@agenthub/shared';
+import type { RunnerHealthzResp, RunnerMode } from '@agenthub/shared';
 
 const PORT = Number(process.env.RUNNER_PORT ?? 8080);
-const MODE = (process.env.RUNNER_MODE ?? 'task') as RunnerMode;
+const MODE = (process.env.RUNNER_MODE ?? 'web') as RunnerMode;
 
 const app = Fastify({ logger: true });
 
-app.get('/healthz', async (): Promise<HealthzResponse> => ({
+app.get('/healthz', async (): Promise<RunnerHealthzResp> => ({
   ok: true,
   mode: MODE,
   serveReady: false,
