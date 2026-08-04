@@ -145,6 +145,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     branch: h.branch,
     baseCommit: h.base_commit,
     sessionId: h.session_id,
+    workspacePath: h.workspace_path,
     ...(h.task ? { task: h.task } : {}),
     createdAt: h.created_at,
     updatedAt: h.updated_at,

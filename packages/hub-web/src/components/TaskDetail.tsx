@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { HandoffDetail, SandboxEvent } from '@agenthub/shared/contracts';
 import { STEPS, TERMINAL_BAD, fmtTime, stepIndexOf } from '../statusMeta.js';
-import { cancelHandoff, dataSource } from '../api/client.js';
+import { cancelHandoff, dataSource, finishHandoff } from '../api/client.js';
 import { useHandoffEvents } from '../api/hooks.js';
 import { mockExtras } from '../api/mock.js';
 
@@ -87,6 +87,11 @@ export function TaskDetail({ detail: t, onOpenPull }: Props) {
           </div>
         </div>
         <div className="d-actions">
+          {t.status === 'running' && dataSource === 'hub' && (
+            <button className="btn" onClick={() => void finishHandoff(t.id)} title="触发 packaging，打包后可 pull">
+              <i className="fa-solid fa-flag-checkered" /> 结束会话并打包
+            </button>
+          )}
           {isActive && (
             <button className="btn danger" onClick={() => void cancelHandoff(t.id)}>
               <i className="fa-solid fa-ban" /> 取消

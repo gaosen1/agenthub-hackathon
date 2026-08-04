@@ -43,6 +43,7 @@ if (process.env.HUB_NO_K8S !== '1') {
     worker = new Worker(db, orchestrator, connector, signer, {
       namespace: NAMESPACE,
       idleTtlMinutes: Number(process.env.SANDBOX_IDLE_TTL_MINUTES ?? 120),
+      taskLingerMinutes: Number(process.env.TASK_LINGER_MINUTES ?? 0),
     });
     sandbox = { connector, orchestrator, namespace: NAMESPACE, worker };
   } catch (e) {

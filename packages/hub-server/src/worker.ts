@@ -27,6 +27,10 @@ export interface WorkerConfig {
   namespace: string;
   /** 交互 sandbox 空闲 TTL（分钟），默认 120 */
   idleTtlMinutes?: number;
+  /** task 完成后长驻分钟数（spec §4.1：task 已完成的会话可长驻继续对话）；
+   *  0/缺省 = 完成即打包（任务接力模式）；>0 = 留驻供 Web/钉钉继续聊，
+   *  空闲超时或 pull-intent 收尾 */
+  taskLingerMinutes?: number;
   webBaseUrl?: string;
 }
 
@@ -175,9 +179,18 @@ export class Worker {
           this.enterPackaging(h, 'failed', health.lastError);
           continue;
         }
-        // task 完成 → 正常打包（仅 web；bot 常驻等 pull）
+        // task 完成（仅 web；bot 常驻等 pull）：缺省立即打包；配置 linger 则长驻继续对话
         if (h.kind === 'web' && h.task && health.taskDone) {
-          this.enterPackaging(h, 'done');
+          const lingerMs = (this.cfg.taskLingerMinutes ?? 0) * 60_000;
+          if (lingerMs <= 0) {
+            this.enterPackaging(h, 'done');
+            continue;
+          }
+          // 长驻窗口内按空闲计时（chat 代理每次请求刷新 last_active_at），超时正常收尾为 done
+          const idleSince = h.last_active_at ?? statusEnteredAt(this.db, h.id, 'running');
+          if (idleSince && Date.now() - Date.parse(idleSince) > lingerMs) {
+            this.enterPackaging(h, 'done');
+          }
           continue;
         }
         // 硬超时（带 task 的 handoff）

@@ -79,6 +79,8 @@ export const HandoffSummarySchema = z.object({
   branch: z.string(),
   baseCommit: z.string(),
   sessionId: z.string(),
+  /** 本地绝对路径；Web 端 ACP session/load 的 cwd 参数需要（spec §4.4） */
+  workspacePath: z.string().optional(),
   task: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),

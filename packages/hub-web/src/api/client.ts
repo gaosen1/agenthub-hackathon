@@ -105,3 +105,11 @@ export async function cancelHandoff(id: string): Promise<void> {
   if (t) headers['authorization'] = `Bearer ${t}`;
   await fetch(`/api/handoffs/${id}/cancel`, { method: 'POST', headers });
 }
+
+/** 交互接力收尾：pull-intent 在 running 时触发 packaging（409 是预期应答，轮询详情等终态） */
+export async function finishHandoff(id: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const t = getToken();
+  if (t) headers['authorization'] = `Bearer ${t}`;
+  await fetch(`/api/handoffs/${id}/pull-intent`, { method: 'POST', headers }).catch(() => undefined);
+}
