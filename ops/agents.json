@@ -1,0 +1,34 @@
+{
+  "_doc": {
+    "说明": "Agent 进程巡检注册表。推荐用 launch_agent.sh 启动并自动登记，每 10 分钟的定时任务会按此表检查并恢复。",
+    "字段": {
+      "name": "Agent 名称，仅用于报告展示",
+      "enabled": "是否参与巡检，false 时跳过",
+      "match": "pgrep -f 的匹配模式，qodercli 场景为 'qodercli --session-id <sid>'",
+      "workdir": "重启时的工作目录（绝对路径）",
+      "restart_cmd": "进程不存在时的拉起命令，qodercli 场景为 'qodercli -r <sid> -p 续跑指令'",
+      "log": "重启后进程 stdout/stderr 追加写入的日志文件（绝对路径）",
+      "task_list": "该 Agent 的任务列表文件路径，仅用于报告提示"
+    }
+  },
+  "agents": [
+    {
+      "name": "example-agent（示例，请用 launch_agent.sh 启动后自动生成真实条目）",
+      "enabled": false,
+      "match": "qodercli --session-id <session-id>",
+      "workdir": "/Users/gaosen/WORKSPACE/ai-competition/team-055",
+      "restart_cmd": "qodercli -r <session-id> -p '上次会话意外中断。请读取任务列表 ops/tasks/example.md，跳过已完成项，继续执行剩余任务。' --dangerously-skip-permissions",
+      "log": "/Users/gaosen/WORKSPACE/ai-competition/team-055/ops/logs/example-agent.log",
+      "task_list": "ops/tasks/example.md"
+    },
+    {
+      "name": "heartbeat-test",
+      "enabled": true,
+      "match": "qodercli --session-id ddaf90f3-7885-4649-87e7-1aeb25131b2d",
+      "workdir": "/Users/gaosen/WORKSPACE/ai-competition/team-055",
+      "restart_cmd": "qodercli -r ddaf90f3-7885-4649-87e7-1aeb25131b2d -p '上次会话意外中断。请读取任务列表 ops/tasks/heartbeat-test.md，跳过已完成项，继续执行剩余任务。' --dangerously-skip-permissions",
+      "log": "/Users/gaosen/WORKSPACE/ai-competition/team-055/ops/logs/heartbeat-test.log",
+      "task_list": "ops/tasks/heartbeat-test.md"
+    }
+  ]
+}

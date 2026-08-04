@@ -5,6 +5,7 @@ Thumbs.db
 # IDE / editor
 .idea/
 .vscode/
+.qoder/
 *.iml
 *.swp
 *.swo
@@ -18,6 +19,7 @@ temp/
 .cache/
 coverage/
 .nyc_output/
+ops/state/
 
 # Local environment and secrets
 .env
