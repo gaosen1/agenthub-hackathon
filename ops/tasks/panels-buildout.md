@@ -54,7 +54,7 @@
   - 为什么最先做：hub-web 现在**零测试覆盖**，是这条 24h 任务最大的风险敞口
   - 验证：`pnpm build && pnpm typecheck && pnpm test`
 
-- [ ] **S2 ⚠️阻塞项：SQLite 迁移机制**
+- [x] **S2 ⚠️阻塞项：SQLite 迁移机制** — 已完成（`PRAGMA user_version` 门控 + 事务化推进 + 拒绝降级；新增迁移**追加**到 `MIGRATIONS` 数组末尾，不改已发布项。基线 115 → 120）
   - 文件：`packages/hub-server/src/db.ts`
   - 现状：`db.exec(DDL)` 全是 `CREATE TABLE IF NOT EXISTS`，**没有 `PRAGMA user_version`、没有任何迁移**
   - 后果：新**表**会在已有 `data/hub.sqlite` 上自动出现，新**列不会**——
