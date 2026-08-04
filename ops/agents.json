@@ -24,9 +24,9 @@
     {
       "name": "heartbeat-test",
       "enabled": true,
-      "match": "qodercli --session-id ddaf90f3-7885-4649-87e7-1aeb25131b2d",
+      "match": "qodercli .*255da52b-f684-4884-85c7-962222e3b39f",
       "workdir": "/Users/gaosen/WORKSPACE/ai-competition/team-055",
-      "restart_cmd": "qodercli -r ddaf90f3-7885-4649-87e7-1aeb25131b2d -p '上次会话意外中断。请读取任务列表 ops/tasks/heartbeat-test.md，跳过已完成项，继续执行剩余任务。' --dangerously-skip-permissions",
+      "restart_cmd": "/Users/gaosen/.local/bin/qodercli -r 255da52b-f684-4884-85c7-962222e3b39f -p '上次会话意外中断。请读取任务列表 ops/tasks/heartbeat-test.md，跳过已完成项，继续执行剩余任务。' --dangerously-skip-permissions",
       "log": "/Users/gaosen/WORKSPACE/ai-competition/team-055/ops/logs/heartbeat-test.log",
       "task_list": "ops/tasks/heartbeat-test.md"
     }
