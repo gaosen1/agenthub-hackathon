@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS handoffs (
   branch TEXT NOT NULL,
   input_oss_key TEXT,
   output_oss_key TEXT,
+  terminal_target TEXT,
   error TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,

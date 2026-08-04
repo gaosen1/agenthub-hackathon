@@ -6,3 +6,5 @@
 export * from './types/manifest.js';
 export * from './types/handoff.js';
 export * from './types/runner.js';
+export * from './types/bot.js';
+export * from './wsHash.js';

@@ -1,14 +1,17 @@
 /**
  * hub-server 应用工厂（spec §4.2）
- * buildApp 注入 db/signer 以便测试；index.ts 负责生产装配。
+ * buildApp 注入 db/signer/sandbox 依赖以便测试；index.ts 负责生产装配。
  */
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { randomBytes } from 'node:crypto';
 import { ZodError } from 'zod';
 import {
   AuthReqSchema,
+  BindChatReqSchema,
+  CreateBotReqSchema,
   CreateHandoffReqSchema,
   TERMINAL_STATES,
+  type BotSummary,
   type CreateHandoffResp,
   type HandoffDetail,
   type HandoffStatus,
@@ -17,39 +20,37 @@ import {
 import type { DB } from './db.js';
 import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
 import { ossKeyOf, type OssSigner } from './oss.js';
-import { ApiFail, assertTransition, fail } from './state.js';
+import { ApiFail, fail } from './state.js';
+import { decryptSecret, encryptSecret } from './crypto.js';
+import { getBot, nowIso, patchHandoff, recordEvent, setStatus, type BotRow, type HandoffRow } from './store.js';
+import { RunnerClient } from './runner-client.js';
+import type { SandboxConnector } from './connector.js';
+import type { PodOrchestrator } from './k8s.js';
+import type { Worker } from './worker.js';
+
+export interface SandboxDeps {
+  connector: SandboxConnector;
+  orchestrator: PodOrchestrator;
+  namespace: string;
+  worker?: Worker;
+}
 
 export interface AppOptions {
   db: DB;
   signer: OssSigner;
   secret: string;
   webBaseUrl?: string;
+  sandbox?: SandboxDeps;
 }
 
-interface HandoffRow {
-  id: string;
-  user_id: number;
-  agent_name: string;
-  workspace_path: string;
-  ws_hash: string;
-  session_id: string;
-  task: string | null;
-  timeout_minutes: number;
-  status: HandoffStatus;
-  kind: 'web' | 'bot';
-  base_commit: string;
-  branch: string;
-  output_oss_key: string | null;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-const now = () => new Date().toISOString();
 const newHandoffId = () => `hf-${randomBytes(3).toString('hex')}`;
+const newToken = () => randomBytes(24).toString('base64url');
+
+/** ACP 代理转发的白名单请求头（spec §4.4） */
+const ACP_FORWARD_HEADERS = ['content-type', 'accept', 'acp-connection-id', 'acp-session-id', 'last-event-id', 'x-qwen-event-epoch'];
 
 export function buildApp(opts: AppOptions): FastifyInstance {
-  const { db, signer, secret } = opts;
+  const { db, signer, secret, sandbox } = opts;
   const webBaseUrl = opts.webBaseUrl ?? 'http://localhost:4180';
   const app = Fastify({ logger: false });
 
@@ -59,24 +60,15 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       return reply.status(err.httpStatus).send({ error: { code: err.code, message: err.message } });
     }
     if (err instanceof ZodError) {
-      return reply.status(400).send({ error: { code: 'ERR_VALIDATION', message: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') } });
+      return reply
+        .status(400)
+        .send({ error: { code: 'ERR_VALIDATION', message: err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') } });
     }
     app.log?.error?.(err);
     return reply.status(500).send({ error: { code: 'ERR_STATE', message: 'internal error' } });
   });
 
-  // ── 状态流转（写库 + 时间线，同事务）──────────────────
-  const setStatus = (h: HandoffRow, to: HandoffStatus, error?: string) => {
-    assertTransition(h.status, to);
-    const at = now();
-    db.prepare('UPDATE handoffs SET status=?, error=COALESCE(?, error), updated_at=? WHERE id=?').run(to, error ?? null, at, h.id);
-    db.prepare('INSERT INTO handoff_events (handoff_id, at, kind, payload) VALUES (?,?,?,?)').run(h.id, at, 'status', to);
-    h.status = to;
-  };
-
-  const recordStatus = (id: string, status: HandoffStatus, at: string) => {
-    db.prepare('INSERT INTO handoff_events (handoff_id, at, kind, payload) VALUES (?,?,?,?)').run(id, at, 'status', status);
-  };
+  app.get('/healthz', async () => ({ ok: true, service: 'hub-server' }));
 
   // ── 认证 ──────────────────────────────────────────────
   app.post('/api/auth/register', async (req, reply) => {
@@ -85,7 +77,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     if (exists) throw fail(400, 'ERR_VALIDATION', 'username already taken');
     const info = db
       .prepare('INSERT INTO users (username, password_hash, created_at) VALUES (?,?,?)')
-      .run(username, await hashPassword(password), now());
+      .run(username, await hashPassword(password), nowIso());
     const uid = Number(info.lastInsertRowid);
     return reply.status(201).send({ token: signJwt({ uid, sub: username }, secret), user: { id: uid, username } });
   });
@@ -101,7 +93,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return reply.send({ token: signJwt({ uid: row.id, sub: username }, secret), user: { id: row.id, username } });
   });
 
-  // ── JWT 守卫 ──────────────────────────────────────────
+  // ── 守卫 ──────────────────────────────────────────────
   const requireAuth = (req: FastifyRequest): { uid: number } => {
     const header = req.headers.authorization ?? '';
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
@@ -119,6 +111,15 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return row;
   };
 
+  const ownBot = (req: FastifyRequest): BotRow => {
+    const { uid } = requireAuth(req);
+    const id = Number((req.params as { id: string }).id);
+    const bot = getBot(db, id);
+    if (!bot || bot.status === 'deleted') throw fail(404, 'ERR_NOT_FOUND', `bot ${id} not found`);
+    if (bot.user_id !== uid) throw fail(403, 'ERR_FORBIDDEN', 'bot belongs to another user');
+    return bot;
+  };
+
   const toSummary = (h: HandoffRow): HandoffSummary => ({
     id: h.id,
     agentName: h.agent_name,
@@ -132,13 +133,30 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     updatedAt: h.updated_at,
   });
 
+  const needSandbox = (): SandboxDeps => {
+    if (!sandbox) throw fail(502, 'ERR_K8S', 'sandbox orchestration not configured');
+    return sandbox;
+  };
+
+  const runnerOfBot = async (bot: BotRow): Promise<RunnerClient> => {
+    const sb = needSandbox();
+    if (!bot.pod_name) throw fail(409, 'ERR_NOT_READY', 'bot sandbox not provisioned');
+    const base = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: bot.pod_name }, 8080);
+    return new RunnerClient(base, bot.runner_token);
+  };
+
   // ── Handoff ───────────────────────────────────────────
   app.post('/api/handoffs', async (req, reply) => {
     const { uid } = requireAuth(req);
     const body = CreateHandoffReqSchema.parse(req.body);
-    if (body.kind === 'bot' && !body.botId) throw fail(400, 'ERR_VALIDATION', 'botId required for kind=bot');
+    if (body.kind === 'bot') {
+      if (!body.botId) throw fail(400, 'ERR_VALIDATION', 'botId required for kind=bot');
+      const bot = getBot(db, body.botId);
+      if (!bot || bot.status === 'deleted') throw fail(404, 'ERR_NOT_FOUND', `bot ${body.botId} not found`);
+      if (bot.user_id !== uid) throw fail(403, 'ERR_FORBIDDEN', 'bot belongs to another user');
+    }
     const id = newHandoffId();
-    const at = now();
+    const at = nowIso();
     const inputKey = ossKeyOf(uid, id, 'input.tar.gz');
     db.prepare(
       `INSERT INTO handoffs (id, user_id, agent_name, workspace_path, ws_hash, session_id, task, timeout_minutes,
@@ -149,7 +167,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       body.timeoutMinutes, 'created', body.kind, body.botId ?? null, body.bindChatId ?? null,
       body.baseCommit, body.branch, inputKey, at, at, at,
     );
-    recordStatus(id, 'created', at);
+    recordEvent(db, id, 'status', 'created');
     let uploadUrl: string;
     try {
       uploadUrl = await signer.signPut(inputKey);
@@ -162,8 +180,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
   app.post('/api/handoffs/:id/uploaded', async (req, reply) => {
     const h = ownHandoff(req);
-    setStatus(h, 'uploaded');
-    setStatus(h, 'queued');
+    setStatus(db, h, 'uploaded');
+    setStatus(db, h, 'queued');
     return reply.send({ status: h.status });
   });
 
@@ -212,14 +230,23 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     if (TERMINAL_STATES.includes(h.status)) {
       throw fail(409, 'ERR_STATE', `handoff already ${h.status}`);
     }
-    // 排队前直接终态；执行中标记 cancelled，Worker 兜底 packaging 部分成果（D2 接入）
-    setStatus(h, 'cancelled', 'cancelled by user');
+    if (h.status === 'running' && sandbox?.worker) {
+      // 执行中：转打包收部分成果，target=cancelled
+      patchHandoff(db, h.id, { terminal_target: 'cancelled' });
+      setStatus(db, h, 'packaging', 'cancelled by user');
+    } else {
+      setStatus(db, h, 'cancelled', 'cancelled by user');
+    }
     return reply.send({ status: h.status });
   });
 
   app.post('/api/handoffs/:id/pull-intent', async (req, reply) => {
     const h = ownHandoff(req);
     if (!TERMINAL_STATES.includes(h.status)) {
+      // 交互接力收尾：running 时主动触发打包，客户端轮询详情等终态（spec §4.2 注）
+      if (h.status === 'running' && sandbox?.worker?.requestPackaging(h.id)) {
+        throw fail(409, 'ERR_NOT_READY', 'packaging started, poll status until done');
+      }
       throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
     }
     if (!h.output_oss_key) throw fail(409, 'ERR_NOT_READY', 'output package not available');
@@ -230,6 +257,147 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       throw fail(502, 'ERR_OSS', `sign download url failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     return reply.send({ downloadUrl });
+  });
+
+  // ── Chat 代理（spec §4.2）：透明反代 sandbox serve 的 /acp ──
+  app.route({
+    method: ['POST', 'GET', 'DELETE'],
+    url: '/api/handoffs/:id/chat/acp',
+    handler: async (req, reply) => {
+      const h = ownHandoff(req);
+      if (h.kind !== 'web') throw fail(409, 'ERR_NOT_READY', 'chat proxy only for kind=web');
+      if (h.status !== 'running') throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
+      const sb = needSandbox();
+      if (!h.pod_name) throw fail(409, 'ERR_NOT_READY', 'sandbox not provisioned');
+      patchHandoff(db, h.id, { last_active_at: nowIso() });
+
+      const base = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, 8081);
+      const headers: Record<string, string> = {};
+      for (const name of ACP_FORWARD_HEADERS) {
+        const v = req.headers[name];
+        if (typeof v === 'string') headers[name] = v;
+      }
+      headers['authorization'] = `Bearer ${h.serve_token}`;
+
+      let upstream: Response;
+      try {
+        upstream = await fetch(`${base}/acp`, {
+          method: req.method,
+          headers,
+          ...(req.method === 'POST' ? { body: JSON.stringify(req.body ?? {}) } : {}),
+        });
+      } catch (e) {
+        throw fail(502, 'ERR_RUNNER', `serve unreachable: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      reply.hijack();
+      const raw = reply.raw;
+      const outHeaders: Record<string, string> = {};
+      upstream.headers.forEach((v, k) => {
+        if (!['transfer-encoding', 'connection', 'keep-alive'].includes(k)) outHeaders[k] = v;
+      });
+      raw.writeHead(upstream.status, outHeaders);
+      if (!upstream.body) {
+        raw.end();
+        return;
+      }
+      const reader = upstream.body.getReader();
+      const pump = async (): Promise<void> => {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          raw.write(value);
+        }
+      };
+      pump()
+        .catch(() => undefined)
+        .finally(() => raw.end());
+      raw.on('close', () => void reader.cancel().catch(() => undefined));
+    },
+  });
+
+  // ── Bots（spec §4.2）──────────────────────────────────
+  const toBotSummary = (b: BotRow): BotSummary => ({
+    id: b.id,
+    name: b.name,
+    status: b.status,
+    ...(b.pod_name ? { podName: b.pod_name } : {}),
+    ...(b.current_handoff_id ? { currentHandoffId: b.current_handoff_id } : {}),
+    createdAt: b.created_at,
+  });
+
+  app.get('/api/bots', async (req, reply) => {
+    const { uid } = requireAuth(req);
+    const rows = db.prepare("SELECT * FROM bots WHERE user_id=? AND status != 'deleted' ORDER BY id").all(uid) as BotRow[];
+    return reply.send({ items: rows.map(toBotSummary) });
+  });
+
+  app.post('/api/bots', async (req, reply) => {
+    const { uid } = requireAuth(req);
+    const body = CreateBotReqSchema.parse(req.body);
+    const dup = db.prepare("SELECT id FROM bots WHERE user_id=? AND name=? AND status != 'deleted'").get(uid, body.name);
+    if (dup) throw fail(400, 'ERR_VALIDATION', `bot "${body.name}" already exists`);
+    const info = db
+      .prepare('INSERT INTO bots (user_id, name, client_id, client_secret_enc, status, created_at) VALUES (?,?,?,?,?,?)')
+      .run(uid, body.name, body.clientId, encryptSecret(body.clientSecret, secret), 'creating', nowIso());
+    const id = Number(info.lastInsertRowid);
+
+    if (sandbox) {
+      const podName = `ah-bot-${id}-${body.name}`.slice(0, 63);
+      const runnerToken = newToken();
+      try {
+        await sandbox.orchestrator.createSecret(`bot-${id}`, {
+          DINGTALK_CLIENT_ID: body.clientId,
+          DINGTALK_CLIENT_SECRET: decryptSecret(encryptSecret(body.clientSecret, secret), secret),
+        });
+        await sandbox.orchestrator.createPod({
+          podName,
+          mode: 'bot',
+          env: { RUNNER_TOKEN: runnerToken, BOT_NAME: body.name },
+          secretRefs: ['agenthub-model', `bot-${id}`],
+          labels: { 'agenthub/kind': 'bot', 'agenthub/owner': String(uid), 'agenthub/bot': String(id) },
+        });
+        db.prepare("UPDATE bots SET pod_name=?, runner_token=?, status='running' WHERE id=?").run(podName, runnerToken, id);
+      } catch (e) {
+        db.prepare("UPDATE bots SET status='error' WHERE id=?").run(id);
+        throw fail(502, 'ERR_K8S', `bot sandbox create failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return reply.status(201).send(toBotSummary(getBot(db, id)!));
+  });
+
+  app.delete('/api/bots/:id', async (req, reply) => {
+    const bot = ownBot(req);
+    if (sandbox) {
+      if (bot.pod_name) {
+        await sandbox.connector.dispose({ namespace: sandbox.namespace, podName: bot.pod_name }).catch(() => undefined);
+        await sandbox.orchestrator.deletePod(bot.pod_name).catch(() => undefined);
+      }
+      await sandbox.orchestrator.deleteSecret(`bot-${bot.id}`).catch(() => undefined);
+    }
+    db.prepare("UPDATE bots SET status='deleted', pod_name=NULL WHERE id=?").run(bot.id);
+    return reply.status(204).send();
+  });
+
+  app.get('/api/bots/:id/chats', async (req, reply) => {
+    const bot = ownBot(req);
+    const runner = await runnerOfBot(bot);
+    try {
+      return reply.send(await runner.chats());
+    } catch (e) {
+      throw fail(502, 'ERR_RUNNER', `chats failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  app.post('/api/bots/:id/bind', async (req, reply) => {
+    const bot = ownBot(req);
+    const body = BindChatReqSchema.parse(req.body);
+    const runner = await runnerOfBot(bot);
+    try {
+      return reply.send(await runner.bind(body));
+    } catch (e) {
+      throw fail(502, 'ERR_RUNNER', `bind failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   });
 
   return app;

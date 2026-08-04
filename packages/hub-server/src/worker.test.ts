@@ -1,0 +1,199 @@
+/**
+ * Worker 调度测试（spec §7 D2–D3）：全链路推进 / 硬超时 / 孤儿回收 / 崩溃恢复
+ */
+import { createServer, type Server } from 'node:http';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { openDb, type DB } from './db.js';
+import type { OssSigner } from './oss.js';
+import type { PodOrchestrator, PodPhase, SandboxPodSpec } from './k8s.js';
+import type { PodRef, SandboxConnector } from './connector.js';
+import { Worker } from './worker.js';
+import { getHandoff, nowIso, recordEvent } from './store.js';
+
+// ── fakes ────────────────────────────────────────────────
+class FakeOrchestrator implements PodOrchestrator {
+  pods = new Map<string, PodPhase>();
+  secrets = new Map<string, Record<string, string>>();
+  created: SandboxPodSpec[] = [];
+  async createPod(spec: SandboxPodSpec) {
+    this.created.push(spec);
+    this.pods.set(spec.podName, 'ready');
+  }
+  async deletePod(name: string) {
+    this.pods.delete(name);
+  }
+  async getPodPhase(name: string): Promise<PodPhase> {
+    return this.pods.get(name) ?? 'gone';
+  }
+  async listSandboxPodNames() {
+    return [...this.pods.keys()];
+  }
+  async createSecret(name: string, data: Record<string, string>) {
+    this.secrets.set(name, data);
+  }
+  async deleteSecret(name: string) {
+    this.secrets.delete(name);
+  }
+}
+
+interface FakeRunnerState {
+  loads: unknown[];
+  snapshots: unknown[];
+  taskDone: boolean;
+  lastError?: string;
+}
+
+function startFakeRunner(): Promise<{ url: string; state: FakeRunnerState; server: Server }> {
+  const state: FakeRunnerState = { loads: [], snapshots: [], taskDone: false };
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const send = (code: number, obj: unknown) => {
+        res.writeHead(code, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(obj));
+      };
+      if (req.url === '/healthz')
+        return send(200, { ok: true, mode: 'web', serveReady: true, taskDone: state.taskDone, ...(state.lastError ? { lastError: state.lastError } : {}) });
+      if (req.url === '/load') {
+        state.loads.push(JSON.parse(body || '{}'));
+        return send(200, { accepted: true });
+      }
+      if (req.url === '/snapshot') {
+        state.snapshots.push(JSON.parse(body || '{}'));
+        return send(200, { manifest: {} });
+      }
+      return send(404, {});
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address() as { port: number };
+      resolve({ url: `http://127.0.0.1:${addr.port}`, state, server });
+    });
+  });
+}
+
+const fakeSigner: OssSigner = {
+  signPut: async (key) => `https://oss.fake/put/${key}`,
+  signGet: async (key) => `https://oss.fake/get/${key}`,
+};
+
+function insertHandoff(
+  db: DB,
+  fields: { id: string; kind?: 'web' | 'bot'; task?: string; timeout?: number; status?: string; botId?: number },
+): void {
+  const at = nowIso();
+  db.prepare(
+    `INSERT INTO handoffs (id, user_id, agent_name, workspace_path, ws_hash, session_id, task, timeout_minutes,
+      status, kind, bot_id, base_commit, branch, input_oss_key, created_at, updated_at, last_active_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  ).run(
+    fields.id, 1, 'demo', '/w', 'w-hash', 'sess', fields.task ?? null, fields.timeout ?? 30,
+    fields.status ?? 'queued', fields.kind ?? 'web', fields.botId ?? null, 'base', 'main',
+    `handoffs/1/${fields.id}/input.tar.gz`, at, at, at,
+  );
+  recordEvent(db, fields.id, 'status', fields.status ?? 'queued');
+}
+
+// ── tests ────────────────────────────────────────────────
+let db: DB;
+let orch: FakeOrchestrator;
+let runner: Awaited<ReturnType<typeof startFakeRunner>>;
+let worker: Worker;
+
+beforeEach(async () => {
+  db = openDb(':memory:');
+  db.prepare("INSERT INTO users (username, password_hash, created_at) VALUES ('u','x','t')").run();
+  orch = new FakeOrchestrator();
+  runner = await startFakeRunner();
+  const connector: SandboxConnector = {
+    getBaseUrl: async (_pod: PodRef, _port: number) => runner.url,
+    dispose: async () => undefined,
+  };
+  worker = new Worker(db, orch, connector, fakeSigner, { namespace: 'agenthub', idleTtlMinutes: 120 });
+});
+
+afterEach(() => {
+  runner.server.close();
+  db.close();
+});
+
+describe('worker 全链路', () => {
+  it('queued → running（同 tick 连续推进）→ taskDone → done，Pod 回收', async () => {
+    insertHandoff(db, { id: 'hf-000001', task: 'do it' });
+    await worker.tick(); // queued → provisioning → running（fake Pod 立即 ready）
+    const running = getHandoff(db, 'hf-000001')!;
+    expect(running.status).toBe('running');
+    expect(orch.created).toHaveLength(1);
+    expect(orch.created[0]!.env['QWEN_SERVER_TOKEN']).toBeTruthy();
+    expect(runner.state.loads).toHaveLength(1);
+    expect((runner.state.loads[0] as { task: string }).task).toBe('do it');
+
+    await worker.tick(); // taskDone=false，保持 running
+    expect(getHandoff(db, 'hf-000001')!.status).toBe('running');
+
+    runner.state.taskDone = true;
+    await worker.tick(); // → packaging → snapshot → done + Pod 删除（同 tick）
+    const done = getHandoff(db, 'hf-000001')!;
+    expect(done.status).toBe('done');
+    expect(done.output_oss_key).toBe('handoffs/1/hf-000001/output.tar.gz');
+    expect(runner.state.snapshots).toHaveLength(1);
+    expect(orch.pods.size).toBe(0);
+  });
+
+  it('带 task 的任务硬超时 → expired（部分成果仍打包）', async () => {
+    insertHandoff(db, { id: 'hf-000002', task: 'long', timeout: 1 });
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000002')!.status).toBe('running');
+    // 把 running 事件时间改到 2 分钟前，触发 1 分钟硬超时
+    db.prepare("UPDATE handoff_events SET at=? WHERE handoff_id=? AND payload='running'").run(
+      new Date(Date.now() - 120_000).toISOString(), 'hf-000002',
+    );
+    await worker.tick(); // → packaging(target=expired) → expired（同 tick）
+    const h = getHandoff(db, 'hf-000002')!;
+    expect(h.status).toBe('expired');
+    expect(runner.state.snapshots.length).toBeGreaterThan(0);
+  });
+
+  it('runner 报 lastError → packaging(target=failed) → failed', async () => {
+    insertHandoff(db, { id: 'hf-000003' });
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000003')!.status).toBe('running');
+    runner.state.lastError = 'load exploded';
+    await worker.tick(); // → packaging → failed（同 tick）
+    expect(getHandoff(db, 'hf-000003')!.status).toBe('failed');
+  });
+
+  it('requestPackaging：running 的交互任务被 pull 触发收尾', async () => {
+    insertHandoff(db, { id: 'hf-000004' });
+    await worker.tick();
+    expect(worker.requestPackaging('hf-000004')).toBe(true);
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000004')!.status).toBe('done');
+  });
+});
+
+describe('回收与恢复', () => {
+  it('孤儿 Pod（无活跃引用）被清理，活跃/bot Pod 保留', async () => {
+    orch.pods.set('ah-web-orphan', 'ready');
+    orch.pods.set('ah-bot-1-mybot', 'ready');
+    db.prepare(
+      "INSERT INTO bots (user_id, name, client_id, client_secret_enc, pod_name, status, created_at) VALUES (1,'mybot','c','e','ah-bot-1-mybot','running','t')",
+    ).run();
+    insertHandoff(db, { id: 'hf-000005' });
+    await worker.tick(); // 建出活跃 Pod
+    await worker.cleanupOrphans();
+    expect(orch.pods.has('ah-web-orphan')).toBe(false);
+    expect(orch.pods.has('ah-bot-1-mybot')).toBe(true);
+    expect(orch.pods.has('ah-web-000005')).toBe(true);
+  });
+
+  it('崩溃恢复：pod 丢失的 running 任务标记 failed', async () => {
+    insertHandoff(db, { id: 'hf-000006', status: 'running' });
+    db.prepare('UPDATE handoffs SET pod_name=? WHERE id=?').run('ah-web-000006', 'hf-000006');
+    // orch 中没有这个 pod → gone
+    await worker.recover();
+    expect(getHandoff(db, 'hf-000006')!.status).toBe('failed');
+  });
+});
