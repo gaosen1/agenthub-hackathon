@@ -81,6 +81,7 @@ export function buildRunner(): FastifyInstance {
           if (body.task) {
             const code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
             state.taskDone = true;
+            if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
             appendLog(code === 0 ? 'ok' : 'err', `task relay finished (exit ${code})`);
           }
           await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName });
@@ -94,6 +95,7 @@ export function buildRunner(): FastifyInstance {
         if (body.task) {
           const code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
           state.taskDone = true;
+          if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
           appendLog(code === 0 ? 'ok' : 'err', `task relay finished (exit ${code})`);
         }
         await startServe({ mode: 'web', workspacePath: manifest.workspacePath, serveToken });

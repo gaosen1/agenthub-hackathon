@@ -186,7 +186,9 @@ describe('runner /load → /snapshot 端到端（stub qwen）', () => {
     const outManifest = JSON.parse(await fs.readFile(join(outDir, 'manifest.json'), 'utf8')) as HandoffManifest;
     expect(outManifest.direction).toBe('pull');
     expect(outManifest.result?.status).toBe('done');
-    expect(outManifest.result?.commitCount).toBe(1); // stub 的 cloud-work commit
+    // stub 的 cloud-work commit + snapshot 前兜底 auto-commit（dirty.txt 未提交变更不丢失）
+    expect(outManifest.result?.commitCount).toBe(2);
+    expect(git(manifest.workspacePath, 'log', '--oneline')).toContain('auto-commit cloud changes');
     expect(outManifest.result?.cloudHead).toBeTruthy();
 
     await fs.access(join(outDir, 'result.bundle')); // commit 增量 bundle 存在

@@ -160,10 +160,17 @@ export async function buildOutput(
   await fs.mkdir(workDir, { recursive: true });
   const ws = manifest.workspacePath;
 
-  // 云端 commit 增量
+  // 云端 commit 增量；打包前先把 Agent 未提交的变更兜底 commit（design.md §6：云端所有变更以 commit 落盘）
   let commitCount = 0;
   let cloudHead: string | undefined;
   try {
+    const dirty = (await exec('git', ['status', '--porcelain'], { cwd: ws })).stdout.trim();
+    if (dirty) {
+      await exec('git', ['config', 'user.email', 'cloud-agent@agenthub'], { cwd: ws });
+      await exec('git', ['config', 'user.name', 'cloud-agent'], { cwd: ws });
+      await exec('git', ['add', '-A'], { cwd: ws });
+      await exec('git', ['commit', '-m', 'chore(agenthub): auto-commit cloud changes before snapshot', '--no-verify'], { cwd: ws });
+    }
     cloudHead = (await exec('git', ['rev-parse', 'HEAD'], { cwd: ws })).stdout.trim();
     commitCount = Number(
       (await exec('git', ['rev-list', `${manifest.repo.baseCommit}..HEAD`, '--count'], { cwd: ws })).stdout.trim(),
