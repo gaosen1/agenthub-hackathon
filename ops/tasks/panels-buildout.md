@@ -64,7 +64,12 @@
   - 验收：一个「用旧 DDL 建库 → 塞数据 → 跑迁移 → 数据仍在且新列存在」的测试
   - **后续所有加列的切片（S12/S17）都依赖本片，必须先落地**
 
-- [ ] **S3 路由外壳**
+- [x] **S3 路由外壳** — 已完成（react-router-dom 7；`App.tsx` 删除，由 `AppShell.tsx` + `views/TasksView.tsx` 取代；`webUrl` 深链修复。基线 120 → 129）
+  - **踩坑记录**：react-router 7 的**数据路由**（`createMemoryRouter`）在导航时会 `new Request(...)`，
+    而 jsdom 的 `AbortSignal` 与 Node undici 的 `Request` 不同源，抛
+    `Expected signal to be an instance of AbortSignal`。路由测试改用
+    `useRoutes(routes)` + `MemoryRouter`（声明式路由）绕开，跑的仍是同一份 `routes` 表。
+    后续写涉及导航的 web 测试直接复用 `src/routes.test.tsx` 里的 `Harness` 写法。
   - 文件：新建 `src/routes.tsx`、`src/AppShell.tsx`、`src/views/{TasksView,SandboxView,OssView,SettingsView}.tsx`（后三个先占位）；
     改 `src/App.tsx`、`src/components/Topbar.tsx`、`src/styles.css`
   - 依赖：`react-router-dom`

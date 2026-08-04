@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { NavLink } from 'react-router-dom';
 import { clearToken, dataSource, getToken } from '../api/client.js';
 
 const SOURCE_META = {
@@ -6,6 +7,13 @@ const SOURCE_META = {
   mock: { cls: 'mock', label: 'Mock 数据 · Hub 未连接' },
   unauth: { cls: 'mock', label: 'Hub 可达 · 未登录' },
 } as const;
+
+const NAV = [
+  { to: '/tasks', icon: 'fa-list-check', label: 'Handoff 任务' },
+  { to: '/sandbox', icon: 'fa-cube', label: 'Sandbox' },
+  { to: '/oss', icon: 'fa-database', label: 'OSS 存储' },
+  { to: '/settings', icon: 'fa-gear', label: '设置' },
+] as const;
 
 export function Topbar({ onLogin }: { onLogin: () => void }) {
   const meta = SOURCE_META[dataSource];
@@ -20,6 +28,13 @@ export function Topbar({ onLogin }: { onLogin: () => void }) {
         </div>
         AgentHub <small>本地 Session 云端接力</small>
       </div>
+      <nav className="nav">
+        {NAV.map((n) => (
+          <NavLink key={n.to} to={n.to} className={({ isActive }) => (isActive ? 'active' : '')}>
+            <i className={`fa-solid ${n.icon}`} /> {n.label}
+          </NavLink>
+        ))}
+      </nav>
       <div className="right">
         <div className="conn">
           <span className={`dot ${meta.cls}`} />
