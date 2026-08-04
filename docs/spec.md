@@ -31,9 +31,9 @@ ACK 集群（ACS 算力，ns=agenthub）        │
               └─ bot 模式: --channel 钉钉 Stream 出站长连接 ←→ 钉钉群
 ```
 
-**两种接力形态**：
-- **任务接力**（`push --task`）：临时 Pod，headless 自动续跑，完成即 packaging + 回收
-- **交互接力**（`push` 不带 task / `push --bot`）：Web 聊天（临时 Pod）或钉钉群对话（常驻 bot Pod）
+**两个正交维度**：
+- **载体 `kind`**：`web`（临时 sandbox，Web 聊天入口，pull 后销毁）| `bot`（常驻钉钉机器人 sandbox，群内 @ 对话）
+- **初始指令 `task`（可选，与载体无关）**：带 task → 恢复 session 后自动注入该指令 headless 续跑（期间仍可 Web/钉钉插话）；不带 → 恢复后挂起等待对话。产品叙事中的"任务接力/交互接力"即指此维度，不是 API 枚举
 
 **monorepo 结构**（pnpm workspaces，全 TypeScript，Node 22）：
 
@@ -196,7 +196,7 @@ CREATE TABLE handoffs (
   agent_name TEXT NOT NULL, workspace_path TEXT NOT NULL, ws_hash TEXT NOT NULL,
   session_id TEXT NOT NULL, task TEXT, timeout_minutes INTEGER NOT NULL DEFAULT 30,
   status TEXT NOT NULL,                     -- §4.1 状态机
-  kind TEXT NOT NULL,                       -- task | web | bot
+  kind TEXT NOT NULL,                       -- web | bot（载体；task 字段正交）
   bot_id INTEGER REFERENCES bots(id), bind_chat_id TEXT,
   pod_name TEXT, serve_token TEXT, runner_token TEXT,
   base_commit TEXT NOT NULL, branch TEXT NOT NULL,
@@ -240,8 +240,8 @@ created → uploaded → queued → provisioning → running → packaging → d
                                    └────────────┴──→ failed / cancelled / expired
 ```
 
-- `running` 中交互接力可长驻；空闲 TTL（默认 2h，按 last_active_at）到期 → packaging → expired
-- 任务接力 timeoutMinutes 硬超时到期 → packaging → expired（已产出成果仍打返回包）
+- `running` 中无 task 或 task 已完成的会话可长驻；空闲 TTL（默认 2h，按 last_active_at）到期 → packaging → expired
+- 带 task 的 handoff 另受 timeoutMinutes 硬超时约束，到期 → packaging → expired（已产出成果仍打返回包）
 
 ### 4.2 hub-server REST API（前缀 `/api`；除 auth 外均需 `Authorization: Bearer <jwt>`）
 
@@ -260,8 +260,8 @@ created → uploaded → queued → provisioning → running → packaging → d
 { "agentName": "payment-gateway", "workspacePath": "/Users/x/payment-gateway",
   "wsHash": "payment-gateway-ab12cd34ef56", "sessionId": "<uuid>",
   "baseCommit": "a41c9e0", "branch": "refactor/order-service",
-  "task": "继续完成重构并补齐单测",          // 可省 → 交互接力
-  "kind": "task",                            // task | web | bot
+  "task": "继续完成重构并补齐单测",          // 可选，与 kind 正交：带 → 落地后自动续跑；不带 → 挂起等对话
+  "kind": "web",                             // web | bot（载体）
   "botId": 3, "bindChatId": "cid...",        // kind=bot 时
   "timeoutMinutes": 30 }
 // 响应 201（CreateHandoffResp）
@@ -291,7 +291,7 @@ created → uploaded → queued → provisioning → running → packaging → d
 
 **`POST /api/handoffs/:id/pull-intent`** — CLI pull 入口：非终态 `409 ERR_NOT_READY {status}`；终态返回 `200 {downloadUrl, manifest}`
 
-#### Chat 代理（Web 聊天，kind=web/task 且 running）
+#### Chat 代理（Web 聊天，kind=web 且 running）
 
 **`ANY /api/handoffs/:id/chat/acp`** — 透明反代 sandbox `qwen serve` 的 `/acp`（POST/GET-SSE/DELETE 原样转发，注入 `Authorization: Bearer <serve_token>`；转发 `Acp-Connection-Id` / `Acp-Session-Id` / `Last-Event-ID` 头）。每次代理更新 `last_active_at`。
 
@@ -309,7 +309,7 @@ created → uploaded → queued → provisioning → running → packaging → d
 
 | 接口 | 请求 | 响应 / 行为 |
 | --- | --- | --- |
-| `GET /healthz` | — | `200 {ok:true, mode:"task"\|"bot", serveReady:boolean, loadedHandoffId?:string}` |
+| `GET /healthz` | — | `200 {ok:true, mode:"web"\|"bot", serveReady:boolean, loadedHandoffId?:string}` |
 | `POST /load` | `{inputUrl, task?, bindChatId?, serveToken?}` | `202 {accepted:true}`；异步执行：下载解包 → 校验 wsHash → 重建 workspacePath → 铺 qwen-home → （bot）写 channels 配置/（可选）改路由 → spawn serve → 就绪后 serveReady=true。失败记录到 /healthz 的 `lastError` |
 | `POST /snapshot` | `{outputUrl}` | `200 {manifest: HandoffManifest}`；现场打包（result.bundle + 全部 chats + logs）PUT 到签名 URL |
 | `GET /chats` | — | `200 {items:[{chatId,title?,lastSeenAt?}]}`（bot 模式；合并 routes.json + observed-contacts.json） |
@@ -317,7 +317,7 @@ created → uploaded → queued → provisioning → running → packaging → d
 | `GET /logs?after=<n>` | — | `200 {items: SandboxEvent[], nextAfter}`（Worker 轮询搬运到 handoff_events） |
 
 runner 进程模型：容器 1 号进程；`qwen serve` 为其子进程（stop/start 实现绑定重启，Pod 不重建）；spawn 参数：
-- task/web：`qwen serve --hostname 0.0.0.0 --port 8081 --workspace <ws>`，env `QWEN_SERVER_TOKEN=<serveToken>`
+- web：`qwen serve --hostname 0.0.0.0 --port 8081 --workspace <ws>`，env `QWEN_SERVER_TOKEN=<serveToken>`
 - bot：`qwen serve --workspace <ws> --channel <botName>`（loopback 即可，无外部访问）
 
 ### 4.4 ACP over HTTP 消息子集（shared: `acp.ts`；hub-web 与 runner 共用）
@@ -394,7 +394,7 @@ agenthub cancel <handoff-id>
 ```yaml
 metadata:
   generateName: ah-<kind>-<handoffId|botName>-
-  labels: { app: agenthub-sandbox, agenthub/kind: "<task|web|bot>", agenthub/owner: "<userId>" }
+  labels: { app: agenthub-sandbox, agenthub/kind: "<web|bot>", agenthub/owner: "<userId>" }
 spec:
   nodeSelector: { type: virtual-kubelet }        # 以集群 ack-virtual-node 实际要求为准
   tolerations: [{ key: virtual-kubelet.io/provider, operator: Exists }]
@@ -404,7 +404,7 @@ spec:
     ports: [{ containerPort: 8080 }, { containerPort: 8081 }]
     resources: { requests: { cpu: "2", memory: 4Gi }, limits: { cpu: "2", memory: 4Gi } }
     env:
-    - RUNNER_MODE=<task|web|bot>
+    - RUNNER_MODE=<web|bot>
     - RUNNER_TOKEN=<random>                      # Hub↔runner 认证
     - QWEN_SERVER_TOKEN=<random>                 # task/web 模式 serve 认证
     - OPENAI_API_KEY / OPENAI_BASE_URL / OPENAI_MODEL  ← secretRef agenthub-model
