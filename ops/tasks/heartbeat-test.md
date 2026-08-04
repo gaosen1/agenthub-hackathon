@@ -11,6 +11,8 @@
 5. 若本会话是从中断中恢复的：先读取下方进度清单，跳过所有已打勾的轮次，从第一个未完成的轮次继续。
 6. 全部 10 轮完成后，追加一行：
    `echo "ALL DONE $(date '+%Y-%m-%d %H:%M:%S')" >> ops/heartbeat/beat.log`
+7. 最后创建完成标记文件（告诉巡检不要再重启本任务）：
+   `touch ops/state/heartbeat-test.done`
 
 进度清单：
 - [x] 第 1 轮

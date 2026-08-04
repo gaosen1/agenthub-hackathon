@@ -22,11 +22,14 @@ agents = [a for a in data.get("agents", []) if a.get("enabled")]
 now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 print(f"=== Agent 巡检报告 {now} ===")
 
-# 收集自身及直接父进程 PID，防止 pgrep 误匹配巡检自身
+# 收集自身及直接父进程 PID，防止 pgrep 误匹配巡检自身（受限环境下容忍失败）
 self_pids = {os.getpid()}
-r = subprocess.run(["ps", "-o", "ppid=", "-p", str(os.getpid())], capture_output=True, text=True)
-if r.stdout.strip().isdigit():
-    self_pids.add(int(r.stdout.strip()))
+try:
+    r = subprocess.run(["ps", "-o", "ppid=", "-p", str(os.getpid())], capture_output=True, text=True)
+    if r.stdout.strip().isdigit():
+        self_pids.add(int(r.stdout.strip()))
+except Exception:
+    pass
 
 
 def find_pids(agent):
@@ -58,6 +61,12 @@ for a in agents:
     pids = find_pids(a)
     if pids:
         print(f"[OK] {name}: 存活 (pid: {', '.join(pids)})")
+        continue
+
+    # 完成标记存在：进程是任务完成后正常退出的，不属于中断，不重启
+    done_file = os.path.join(state_dir, f"{name}.done")
+    if os.path.isfile(done_file):
+        print(f"[DONE] {name}: 进程已退出，任务已完成（存在 .done 标记），不重启")
         continue
 
     dead += 1
