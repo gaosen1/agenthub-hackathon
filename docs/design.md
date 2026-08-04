@@ -317,7 +317,7 @@ sequenceDiagram
 ```
 
 ### 6.1 路径一致性约束（易错点）
-qwen 的会话存储按 cwd 路径 hash 分片（`getWorkspaceScopeDirName` = 净化 basename(≤32) + '-' + sha256(canonical path) 前 12 位）。**runner 必须在容器内重建与本地完全相同的绝对路径**（如 `/Users/x/proj`，Linux 容器内 mkdir -p 可行），否则 loadSession 找不到历史。manifest 的 `wsHash` 用于还原后自校验。
+qwen 的会话存储按 cwd 路径分片（目录名 = sanitizeCwd(绝对路径)：完整路径逐字符把非字母数字替换为 `-`，Windows 先转小写；已对照 qwen 0.21.3 源码 utils/paths.ts 与 ~/.qwen/projects/ 实际目录验证，早期版本描述的 basename+sha256 不准）。**runner 必须在容器内重建与本地完全相同的绝对路径**（如 `/Users/x/proj`，Linux 容器内 mkdir -p 可行），否则 loadSession 找不到历史。manifest 的 `wsHash` 用于还原后自校验。
 
 ### 6.2 push --bot 热替换
 runner 收到新 `/load`：停 serve → 备份后覆盖 workspace 与 qwen-home → 带 bindChatId 则改写该群路由 → 重启 serve。其他群既有路由保留在 routes.json，重启后懒恢复，各群会话不受影响。

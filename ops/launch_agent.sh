@@ -7,7 +7,7 @@ NAME="${1:?用法: $0 <agent名称> <任务文件>}"
 TASK_FILE="${2:?缺少任务文件}"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$ROOT")"
-QODERCLI="${QODERCLI_BIN:-$HOME/.qoder/bin/qodercli}"
+QODERCLI="${QODERCLI_BIN:-$HOME/.local/bin/qodercli}"
 
 if [ ! -f "$TASK_FILE" ]; then
   echo "[ERROR] 任务文件不存在: $TASK_FILE"
@@ -20,12 +20,17 @@ mkdir -p "$LOG_DIR" "$STATE_DIR"
 
 # 为每个 Agent 生成固定 session-id，巡检恢复时用 qodercli -r 续接同一会话
 SID=$(uuidgen | tr 'A-Z' 'a-z')
-MATCH="qodercli --session-id ${SID}"
+# 用正则兼容两种命令行：首启为 --session-id <sid>，巡检恢复为 -r <sid>
+MATCH="qodercli .*${SID}"
 LOG_FILE="${LOG_DIR}/${NAME}.log"
-# 恢复指令：续接原会话上下文，并以任务文件中的进度为准继续
-RESTART_CMD="qodercli -r ${SID} -p '上次会话意外中断。请读取任务列表 ${TASK_FILE}，跳过已完成项，继续执行剩余任务。' --dangerously-skip-permissions"
+# 恢复指令：续接原会话上下文，并以任务文件中的进度为准继续。
+# 注意：重启方（巡检定时会话）若运行在沙箱中，需先提权（required_permissions=all）再执行本命令，
+# 否则 qodercli 无法写入 ~/.qoder 会话目录会立即退出。
+# 任务全部完成后必须 touch ${STATE_DIR}/${NAME}.done，否则巡检会把正常退出当中断反复重启。
+RESTART_CMD="${QODERCLI} -r ${SID} -p '上次会话意外中断。请读取任务列表 ${TASK_FILE}，跳过已完成项，继续执行剩余任务；若所有任务均已完成，请执行 touch ${STATE_DIR}/${NAME}.done 后结束。' --dangerously-skip-permissions"
 
 echo "$SID" > "$STATE_DIR/$NAME.session-id"
+rm -f "$STATE_DIR/$NAME.done"  # 重新启动时清除完成标记，让巡检接管
 
 # 拉起 Agent（headless 模式，日志落盘）
 cd "$REPO"

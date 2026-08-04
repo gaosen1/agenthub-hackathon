@@ -35,8 +35,9 @@ export class HubClient {
   constructor(private readonly cfg: CliConfig) {}
 
   private async request<T>(method: string, path: string, body?: unknown, parse?: (d: unknown) => T): Promise<T> {
-    // 无 body 时不能带 json content-type（Fastify 会拒绝空 JSON body）
-    const headers: Record<string, string> = body === undefined ? {} : { 'content-type': 'application/json' };
+    const headers: Record<string, string> = {};
+    // 无 body 时不声明 json，否则 Fastify 拒绝空 body（Body cannot be empty）
+    if (body !== undefined) headers['content-type'] = 'application/json';
     if (this.cfg.token) headers['authorization'] = `Bearer ${this.cfg.token}`;
     const resp = await fetch(`${this.cfg.hubUrl}${path}`, {
       method,
