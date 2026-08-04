@@ -86,7 +86,11 @@
   - 验收：4 个 tab 可切换；`/tasks/hf-xxx` 深链选中**正确**任务；浏览器前进后退可用
   - 验证：+ `pnpm -C packages/hub-web build`
 
-- [ ] **S4 共享 UI 原子组件**
+- [x] **S4 共享 UI 原子组件** — 已完成（基线 129 → 147）
+  - 落地：`ui/Card.tsx`（`Card` + `ViewHeader`）、`ui/StatGrid.tsx`（`StatGrid` + `formatBytes` + `formatDuration`）、
+    `ui/DataTable.tsx`、`ui/FormRow.tsx`（`FormRow` + `Switch` + `TagChip`）
+  - **约定**：后端一律返回原始字节与秒，单位换算只在展示层做（`formatBytes`/`formatDuration`）。
+    `DataTable` 的空态文案由调用方给，不做「无数据」这种没信息量的兜底。
   - 文件：`src/components/ui/{Card,ViewHeader,StatGrid,DataTable,FormRow,Switch,TagChip}.tsx` + 测试
   - `Switch` 必须是**受控**的 `role="switch" aria-checked` 组件，不是原型的 `classList.toggle`——
     这也是它可测试的前提
