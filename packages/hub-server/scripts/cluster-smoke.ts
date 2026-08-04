@@ -10,13 +10,16 @@ import { PortForwardConnector } from '../src/connector.js';
 
 const NS = 'agenthub';
 const POD = 'smoke-orchestrator';
+const IMAGE = process.env.SMOKE_IMAGE ?? 'registry.cn-hangzhou.aliyuncs.com/acs-sample/nginx:latest';
+const PORT = Number(process.env.SMOKE_PORT ?? 80);
 
 async function main(): Promise<void> {
   const kc = loadKube();
   const orch = new K8sOrchestrator(kc, {
     namespace: NS,
-    image: 'registry.cn-hangzhou.aliyuncs.com/acs-sample/nginx:latest',
+    image: IMAGE,
     acs: true,
+    ...(process.env.SMOKE_PULL_SECRET ? { imagePullSecret: process.env.SMOKE_PULL_SECRET } : {}),
   });
 
   console.log('creating pod via K8sOrchestrator...');
@@ -47,9 +50,10 @@ async function main(): Promise<void> {
 
   console.log('port-forwarding via PortForwardConnector...');
   const connector = new PortForwardConnector(new PortForward(kc));
-  const base = await connector.getBaseUrl({ namespace: NS, podName: POD }, 80);
-  const res = await fetch(base, { signal: AbortSignal.timeout(10_000) });
-  console.log('HTTP', res.status, 'via', base);
+  const base = await connector.getBaseUrl({ namespace: NS, podName: POD }, PORT);
+  const path = PORT === 8080 ? '/healthz' : '/';
+  const res = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(10_000) });
+  console.log('HTTP', res.status, await res.text().then((t) => t.slice(0, 120)).catch(() => ''), 'via', base);
   if (!res.ok) throw new Error(`unexpected status ${res.status}`);
 
   await connector.dispose({ namespace: NS, podName: POD });

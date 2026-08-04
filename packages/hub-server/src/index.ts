@@ -36,6 +36,7 @@ if (process.env.HUB_NO_K8S !== '1') {
       namespace: NAMESPACE,
       image: process.env.SANDBOX_IMAGE ?? 'agenthub/sandbox:dev',
       acs: process.env.SANDBOX_ACS !== '0',
+      ...(process.env.SANDBOX_PULL_SECRET ? { imagePullSecret: process.env.SANDBOX_PULL_SECRET } : {}),
     });
     const connector: SandboxConnector =
       process.env.HUB_IN_CLUSTER === '1' ? new DirectConnector(orchestrator.coreApi()) : new PortForwardConnector(new PortForward(kc));

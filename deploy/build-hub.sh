@@ -12,7 +12,7 @@ pnpm --filter @agenthub/shared --filter @agenthub/hub-server build
 
 STAGE="$ROOT/deploy/hub-dist"
 rm -rf "$STAGE"
-pnpm --filter @agenthub/hub-server deploy --prod "$STAGE"
+pnpm --filter @agenthub/hub-server deploy --legacy --prod "$STAGE"
 
 docker build -t "$REGISTRY/agenthub/hub:$TAG" -f "$ROOT/deploy/Dockerfile.hub" "$ROOT/deploy"
 docker push "$REGISTRY/agenthub/hub:$TAG"

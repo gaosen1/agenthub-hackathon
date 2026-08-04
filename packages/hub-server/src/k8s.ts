@@ -30,6 +30,8 @@ export interface K8sConfig {
   image: string;
   /** ACS 调度所需 nodeSelector/tolerations 开关 */
   acs: boolean;
+  /** 私有 ACR 拉取凭证 Secret 名（可选） */
+  imagePullSecret?: string;
 }
 
 export const SANDBOX_LABEL = 'app=agenthub-sandbox';
@@ -60,6 +62,7 @@ export class K8sOrchestrator implements PodOrchestrator {
       },
       spec: {
         restartPolicy: 'Never',
+        ...(this.cfg.imagePullSecret ? { imagePullSecrets: [{ name: this.cfg.imagePullSecret }] } : {}),
         ...(this.cfg.acs
           ? {
               nodeSelector: { type: 'virtual-kubelet' },
