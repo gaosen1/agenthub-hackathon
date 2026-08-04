@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
-import type { HandoffDetail } from '@agenthub/shared/contracts';
+import { useEffect, useMemo, useRef } from 'react';
+import type { HandoffDetail, SandboxEvent } from '@agenthub/shared/contracts';
 import { STEPS, TERMINAL_BAD, fmtTime, stepIndexOf } from '../statusMeta.js';
-import { cancelHandoff } from '../api/client.js';
+import { cancelHandoff, dataSource } from '../api/client.js';
+import { useHandoffEvents } from '../api/hooks.js';
 import { mockExtras } from '../api/mock.js';
 
 interface Props {
@@ -25,6 +26,23 @@ export function TaskDetail({ detail: t, onOpenPull }: Props) {
   const stepIdx = stepIndexOf(t.status, t.timeline);
   const isBad = TERMINAL_BAD.includes(t.status);
   const isActive = t.status === 'running' || t.status === 'queued' || t.status === 'provisioning';
+
+  // 真 Hub：日志从 events 接口轮询（kind=log → SandboxEvent JSON）；mock：用样本日志
+  const { data: eventsData } = useHandoffEvents(t.id, dataSource === 'hub');
+  const logs = useMemo(() => {
+    if (dataSource !== 'hub') return extra?.logs ?? [];
+    return (eventsData?.items ?? [])
+      .filter((e) => e.kind === 'log')
+      .map((e) => {
+        try {
+          const ev = JSON.parse(e.payload) as SandboxEvent;
+          return { id: e.id, t: fmtTime(ev.t), tag: ev.tag, c: ev.c };
+        } catch {
+          return { id: e.id, t: fmtTime(e.at), tag: 'info' as const, c: e.payload };
+        }
+      });
+  }, [eventsData, extra]);
+
   const timeAt = (key: string): string => {
     const e = t.timeline.find((x) => x.status === key);
     return e ? fmtTime(e.at) : '';
@@ -32,7 +50,7 @@ export function TaskDetail({ detail: t, onOpenPull }: Props) {
 
   useEffect(() => {
     if (logBox.current) logBox.current.scrollTop = logBox.current.scrollHeight;
-  }, [t.id, extra?.logs.length]);
+  }, [t.id, logs.length]);
 
   const stepState = (i: number): string => {
     if (isBad) return i < stepIdx ? 'done' : i === stepIdx ? 'fail' : '';
@@ -227,7 +245,7 @@ export function TaskDetail({ detail: t, onOpenPull }: Props) {
           <span className="hint">{t.status === 'running' ? '实时流式回传' : '归档日志'}</span>
         </div>
         <div className="logs" ref={logBox}>
-          {(extra?.logs ?? []).map((l) => (
+          {logs.map((l) => (
             <div className="log-line" key={l.id}>
               <span className="t">{l.t}</span>
               <span className={`tag ${l.tag}`}>[{l.tag.toUpperCase()}]</span>

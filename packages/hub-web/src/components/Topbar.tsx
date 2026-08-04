@@ -1,7 +1,17 @@
-import { dataSource } from '../api/client.js';
+import { useQueryClient } from '@tanstack/react-query';
+import { clearToken, dataSource, getToken } from '../api/client.js';
 
-export function Topbar() {
-  const isHub = dataSource === 'hub';
+const SOURCE_META = {
+  hub: { cls: '', label: 'Hub 已连接' },
+  mock: { cls: 'mock', label: 'Mock 数据 · Hub 未连接' },
+  unauth: { cls: 'mock', label: 'Hub 可达 · 未登录' },
+} as const;
+
+export function Topbar({ onLogin }: { onLogin: () => void }) {
+  const meta = SOURCE_META[dataSource];
+  const qc = useQueryClient();
+  const loggedIn = getToken() !== null && dataSource === 'hub';
+
   return (
     <header className="topbar">
       <div className="brand">
@@ -12,12 +22,25 @@ export function Topbar() {
       </div>
       <div className="right">
         <div className="conn">
-          <span className={`dot ${isHub ? '' : 'mock'}`} />
-          {isHub ? 'Hub 已连接' : 'Mock 数据 · Hub 未连接'}
+          <span className={`dot ${meta.cls}`} />
+          {meta.label}
         </div>
-        <div className="avatar">
-          <i className="fa-solid fa-user" />
-        </div>
+        {loggedIn ? (
+          <button
+            className="icon-btn"
+            title="登出"
+            onClick={() => {
+              clearToken();
+              void qc.invalidateQueries();
+            }}
+          >
+            <i className="fa-solid fa-right-from-bracket" />
+          </button>
+        ) : (
+          <button className="btn" style={{ padding: '5px 12px', fontSize: 12 }} onClick={onLogin}>
+            <i className="fa-solid fa-user" /> 登录
+          </button>
+        )}
       </div>
     </header>
   );
