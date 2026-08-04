@@ -116,7 +116,7 @@ export function buildRunner(): FastifyInstance {
     const body = SnapshotReqSchema.parse(req.body);
     if (!manifest) return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'nothing loaded' } });
     appendLog('sys', 'packaging output');
-    const tarball = await buildOutput(manifest, {
+    const { tarball, manifest: outManifest } = await buildOutput(manifest, {
       workDir: join(WORK_ROOT, 'output'),
       logs: allLogs(),
       status: state.lastError ? 'failed' : 'done',
@@ -125,7 +125,7 @@ export function buildRunner(): FastifyInstance {
     });
     await uploadTo(body.outputUrl, tarball);
     appendLog('ok', 'output uploaded');
-    return reply.send({ manifest });
+    return reply.send({ manifest: outManifest });
   });
 
   // bot：已知群列表

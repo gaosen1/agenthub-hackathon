@@ -24,6 +24,7 @@
   "devDependencies": {
     "@types/ali-oss": "^6.16.11",
     "@types/better-sqlite3": "^7.6.12",
+    "tar": "^7.5.22",
     "tsx": "^4.19.0",
     "vitest": "^3.0.0"
   }

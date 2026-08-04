@@ -154,7 +154,7 @@ export async function listChats(home: string, wsHash: string): Promise<ChatListI
 export async function buildOutput(
   manifest: HandoffManifest,
   opts: { workDir: string; logs: SandboxEvent[]; status: ManifestResult['status']; startedAt: number; error?: string },
-): Promise<string> {
+): Promise<{ tarball: string; manifest: HandoffManifest }> {
   const { workDir } = opts;
   await fs.rm(workDir, { recursive: true, force: true });
   await fs.mkdir(workDir, { recursive: true });
@@ -215,7 +215,7 @@ export async function buildOutput(
 
   const tarball = join(dirname(workDir), `output-${manifest.handoffId}.tar.gz`);
   await tar.c({ file: tarball, cwd: workDir, gzip: true }, await fs.readdir(workDir));
-  return tarball;
+  return { tarball, manifest: outManifest };
 }
 
 export async function uploadTo(url: string, file: string): Promise<void> {

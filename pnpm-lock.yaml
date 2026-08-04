@@ -51,6 +51,9 @@ importers:
       '@types/better-sqlite3':
         specifier: ^7.6.12
         version: 7.6.13
+      tar:
+        specifier: ^7.5.22
+        version: 7.5.22
       tsx:
         specifier: ^4.19.0
         version: 4.23.5
