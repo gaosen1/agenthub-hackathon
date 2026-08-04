@@ -77,11 +77,16 @@ export function buildRunner(): FastifyInstance {
             appendLog('sys', `binding chat ${body.bindChatId} -> session ${manifest.sessionId}`);
             await rewriteRoute(qwenHome(), manifest.wsHash, botName, body.bindChatId, manifest.sessionId, manifest.workspacePath);
           }
+          // task 与载体正交（spec §1）：bot 带 task 也先 headless 续跑，完成后再起 serve 供群内对话
+          if (body.task) {
+            const code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
+            state.taskDone = true;
+            appendLog(code === 0 ? 'ok' : 'err', `task relay finished (exit ${code})`);
+          }
           await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName });
           await waitServeReady('bot');
           state.serveReady = true;
           appendLog('ok', 'bot serve ready (dingtalk stream connected on qwen side)');
-          // bot 模式带 task：serve 起来后由钉钉对话驱动，task 仅作为提示注入首群绑定场景，MVP 不自动执行
           return;
         }
 
