@@ -229,11 +229,19 @@ describe('git 合并冲突路径（D2-3 验收：有冲突保留标记）', () =
 });
 
 describe('workspace 工具', () => {
-  it('wsHash 格式：basename-12hex，同路径稳定', () => {
-    const h1 = getWorkspaceScopeDirName('/Users/x/payment-gateway');
-    const h2 = getWorkspaceScopeDirName('/Users/x/payment-gateway');
-    assert.equal(h1, h2);
-    assert.match(h1, /^payment-gateway-[0-9a-f]{12}$/);
+  it('wsHash 规则：完整路径非字母数字替换为 -（对照真实 qwen 落盘目录）', () => {
+    // 黄金样本：qwen 0.21.3 在本机为该路径实际创建的 projects 目录名
+    assert.equal(
+      getWorkspaceScopeDirName('/Users/gaosen/WORKSPACE/ai-competition/team-055'),
+      '-Users-gaosen-WORKSPACE-ai-competition-team-055',
+    );
+    // 同路径稳定
+    assert.equal(
+      getWorkspaceScopeDirName('/Users/x/payment-gateway'),
+      getWorkspaceScopeDirName('/Users/x/payment-gateway'),
+    );
+    // 特殊字符（含中文）全部替换为 -
+    assert.equal(getWorkspaceScopeDirName('/tmp/中文 proj_1.0'), '-tmp----proj-1-0');
   });
 
   it('handoff id 与 OSS key 规则（§2/§3.9）', () => {

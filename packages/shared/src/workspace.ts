@@ -1,17 +1,15 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { basename, resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { resolve } from 'node:path';
 
 /**
- * qwen 的 getWorkspaceScopeDirName 等价实现（design.md §6.1）：
- * 净化 basename（≤32 字符）+ '-' + sha256(canonical path) 前 12 位
+ * qwen 真实实现（packages/core/src/utils/paths.ts 的 sanitizeCwd，已对照 0.21.3 源码与
+ * ~/.qwen/projects/ 实际目录验证）：完整绝对路径逐字符把非字母数字替换为 '-'，
+ * Windows 下先转小写。注意：design.md §6.1 描述的 basename+sha256 方案与真实实现不符。
  */
 export function getWorkspaceScopeDirName(workspacePath: string): string {
   const canonical = resolve(workspacePath);
-  const sanitized = basename(canonical)
-    .replace(/[^a-zA-Z0-9-_]/g, '-')
-    .slice(0, 32);
-  const hash = createHash('sha256').update(canonical).digest('hex').slice(0, 12);
-  return `${sanitized}-${hash}`;
+  const normalized = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+  return normalized.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
 /** §2 ID 规则：handoff id = hf- + 6 位 hex */
