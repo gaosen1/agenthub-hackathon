@@ -43,7 +43,7 @@
 
 ## Phase 0 — 先建闸门
 
-- [ ] **S1 ⚠️必须最先做：hub-web 测试闸门**
+- [x] **S1 ⚠️必须最先做：hub-web 测试闸门** — 已完成（vitest 3.2.7 + jsdom + testing-library，6 个测试；基线 109 → 115）
   - 文件：`packages/hub-web/package.json`（`test` 脚本目前是 `echo 'no tests yet'`）、
     新建 `packages/hub-web/vitest.config.ts`（jsdom 环境）、2 个 smoke 测试
   - 依赖：`vitest` 对齐 hub-server 的 **3.x**（`shared`/`cli` 用的是 4.x，别引入第三个版本）、
