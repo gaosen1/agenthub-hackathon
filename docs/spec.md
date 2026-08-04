@@ -400,7 +400,7 @@ spec:
   tolerations: [{ key: virtual-kubelet.io/provider, operator: Exists }]
   containers:
   - name: sandbox
-    image: <ACR>/agenthub/sandbox:<tag>          # node22 + qwen(固定版) + runner + git/rg
+    image: <ACR>/qwen-code-demo/sandbox:<tag>          # node22 + qwen(固定版) + runner + git/rg
     ports: [{ containerPort: 8080 }, { containerPort: 8081 }]
     resources: { requests: { cpu: "2", memory: 4Gi }, limits: { cpu: "2", memory: 4Gi } }
     env:

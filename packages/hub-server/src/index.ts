@@ -34,7 +34,7 @@ if (process.env.HUB_NO_K8S !== '1') {
     const kc = loadKube();
     const orchestrator = new K8sOrchestrator(kc, {
       namespace: NAMESPACE,
-      image: process.env.SANDBOX_IMAGE ?? 'agenthub/sandbox:dev',
+      image: process.env.SANDBOX_IMAGE ?? 'crpi-0y776m3vqetn6kuh.cn-hangzhou.personal.cr.aliyuncs.com/qwen-code-demo/sandbox:dev',
       acs: process.env.SANDBOX_ACS !== '0',
       ...(process.env.SANDBOX_PULL_SECRET ? { imagePullSecret: process.env.SANDBOX_PULL_SECRET } : {}),
     });

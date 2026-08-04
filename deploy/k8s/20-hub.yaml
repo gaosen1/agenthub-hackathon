@@ -20,7 +20,7 @@ spec:
             - { name: HUB_IN_CLUSTER, value: '1' }
             - { name: HUB_HOST, value: 0.0.0.0 }
             - { name: SANDBOX_NAMESPACE, value: agenthub }
-            - { name: SANDBOX_IMAGE, value: REPLACE_ACR/agenthub/sandbox:latest }
+            - { name: SANDBOX_IMAGE, value: REPLACE_ACR/qwen-code-demo/sandbox:dev }
             - { name: HUB_DB_PATH, value: /data/hub.sqlite }
           envFrom:
             - secretRef: { name: agenthub-hub-env } # HUB_SECRET_KEY / OSS_AK / OSS_SK / OSS_BUCKET / OSS_REGION

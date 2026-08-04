@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # 构建并推送 sandbox 镜像（spec §7.1）
 # 用法: ./build-sandbox.sh <acr-registry> [tag]
-# 可选环境变量: ACR_NAMESPACE（默认 agenthub）、QWEN_VERSION
+# 可选环境变量: ACR_NAMESPACE（默认 qwen-code-demo）、QWEN_VERSION
 set -euo pipefail
 REGISTRY="${1:?用法: $0 <acr-registry> [tag]}"
 TAG="${2:-latest}"
-IMAGE="$REGISTRY/${ACR_NAMESPACE:-agenthub}/sandbox:$TAG"
+IMAGE="$REGISTRY/${ACR_NAMESPACE:-qwen-code-demo}/sandbox:$TAG"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 cd "$ROOT"
