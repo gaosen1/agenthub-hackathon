@@ -5,7 +5,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { BindReqSchema, LoadReqSchema, SnapshotReqSchema, type HealthzResponse } from '@agenthub/shared';
+import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, type RunnerHealthzResp } from '@agenthub/shared';
 import { allLogs, appendLog, logsAfter, state } from './state.js';
 import { runTask, startServe, stopServe, waitServeReady } from './qwen.js';
 import {
@@ -37,7 +37,7 @@ export function buildRunner(): FastifyInstance {
     }
   });
 
-  app.get('/healthz', async (): Promise<HealthzResponse & { taskDone: boolean }> => ({
+  app.get('/healthz', async (): Promise<RunnerHealthzResp & { taskDone: boolean }> => ({
     ok: true,
     mode: state.mode,
     serveReady: state.serveReady,
@@ -48,7 +48,7 @@ export function buildRunner(): FastifyInstance {
 
   // 下载还原 →（bot）注入 channel 配置/绑定 →（task）headless 续跑 → 拉起 serve
   app.post('/load', async (req, reply) => {
-    const body = LoadReqSchema.parse(req.body);
+    const body = RunnerLoadReqSchema.parse(req.body);
     if (state.loading) return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'load in progress' } });
     state.loading = true;
     state.serveReady = false;
@@ -113,7 +113,7 @@ export function buildRunner(): FastifyInstance {
 
   // 现场打包上传返回包
   app.post('/snapshot', async (req, reply) => {
-    const body = SnapshotReqSchema.parse(req.body);
+    const body = RunnerSnapshotReqSchema.parse(req.body);
     if (!manifest) return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'nothing loaded' } });
     appendLog('sys', 'packaging output');
     const { tarball, manifest: outManifest } = await buildOutput(manifest, {
@@ -136,7 +136,7 @@ export function buildRunner(): FastifyInstance {
 
   // bot：绑定指定群到 session（停 serve → 改路由 → 重启，spec §8.2）
   app.post('/bind', async (req, reply) => {
-    const body = BindReqSchema.parse(req.body);
+    const body = RunnerBindReqSchema.parse(req.body);
     if (state.mode !== 'bot' || !manifest) {
       return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'bind requires loaded bot mode' } });
     }

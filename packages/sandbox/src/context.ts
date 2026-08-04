@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import * as tar from 'tar';
-import { HandoffManifestSchema, getWorkspaceScopeDirName, type HandoffManifest, type ChatListItem, type ManifestResult, type SandboxEvent } from '@agenthub/shared';
+import { HandoffManifestSchema, getWorkspaceScopeDirName, type HandoffManifest, type ChatListItem, type HandoffResult, type SandboxEvent } from '@agenthub/shared';
 
 const exec = promisify(execFile);
 
@@ -153,7 +153,7 @@ export async function listChats(home: string, wsHash: string): Promise<ChatListI
 // ── 返回包打包（spec §3.1 output）────────────────────────
 export async function buildOutput(
   manifest: HandoffManifest,
-  opts: { workDir: string; logs: SandboxEvent[]; status: ManifestResult['status']; startedAt: number; error?: string },
+  opts: { workDir: string; logs: SandboxEvent[]; status: HandoffResult['status']; startedAt: number; error?: string },
 ): Promise<{ tarball: string; manifest: HandoffManifest }> {
   const { workDir } = opts;
   await fs.rm(workDir, { recursive: true, force: true });

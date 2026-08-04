@@ -1,7 +1,7 @@
 /**
  * runner 控制面客户端（spec §4.3），Worker/API 经 SandboxConnector 调用
  */
-import type { ChatListItem, HandoffManifest, HealthzResponse, LoadReq, SnapshotReq, BindReq, SandboxEvent } from '@agenthub/shared';
+import type { ChatListItem, HandoffManifest, RunnerHealthzResp, RunnerLoadReq, RunnerSnapshotReq, RunnerBindReq, SandboxEvent } from '@agenthub/shared';
 
 export class RunnerError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -31,15 +31,15 @@ export class RunnerClient {
     return (await res.json()) as T;
   }
 
-  healthz(): Promise<HealthzResponse & { taskDone?: boolean }> {
+  healthz(): Promise<RunnerHealthzResp> {
     return this.call('GET', '/healthz');
   }
 
-  load(req: LoadReq): Promise<{ accepted: boolean }> {
+  load(req: RunnerLoadReq): Promise<{ accepted: boolean }> {
     return this.call('POST', '/load', req);
   }
 
-  snapshot(req: SnapshotReq): Promise<{ manifest: HandoffManifest }> {
+  snapshot(req: RunnerSnapshotReq): Promise<{ manifest: HandoffManifest }> {
     return this.call('POST', '/snapshot', req);
   }
 
@@ -47,7 +47,7 @@ export class RunnerClient {
     return this.call('GET', '/chats');
   }
 
-  bind(req: BindReq): Promise<{ ok: boolean }> {
+  bind(req: RunnerBindReq): Promise<{ ok: boolean }> {
     return this.call('POST', '/bind', req);
   }
 

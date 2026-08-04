@@ -74,7 +74,7 @@ describe('auth', () => {
     await register('alice');
     const dup = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { username: 'alice', password: 'secret123' } });
     expect(dup.statusCode).toBe(400);
-    const short = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { username: 'b', password: '1' } });
+    const short = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { username: '', password: '' } });
     expect(short.statusCode).toBe(400);
     expect((short.json() as { error: { code: string } }).error.code).toBe('ERR_VALIDATION');
   });

@@ -12,10 +12,11 @@ import {
   BindChatReqSchema,
   CreateBotReqSchema,
   CreateHandoffReqSchema,
-  TERMINAL_STATES,
-  type BotSummary,
+  TERMINAL_STATUSES,
+  type Bot,
   type CreateHandoffResp,
   type HandoffDetail,
+  type HandoffResult,
   type HandoffStatus,
   type HandoffSummary,
 } from '@agenthub/shared';
@@ -205,10 +206,10 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       .prepare("SELECT at, payload FROM handoff_events WHERE handoff_id=? AND kind='status' ORDER BY id")
       .all(h.id) as Array<{ at: string; payload: string }>).map((e) => ({ status: e.payload as HandoffStatus, at: e.at }));
     const detail: HandoffDetail = { ...toSummary(h), timeline, ...(h.error ? { error: h.error } : {}) };
-    if (TERMINAL_STATES.includes(h.status)) {
+    if (TERMINAL_STATUSES.includes(h.status)) {
       if (h.result_manifest) {
         try {
-          detail.result = (JSON.parse(h.result_manifest) as { result?: unknown }).result;
+          detail.result = (JSON.parse(h.result_manifest) as { result?: HandoffResult }).result;
         } catch {
           // 脏数据不阻塞详情
         }
@@ -250,7 +251,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
   app.post('/api/handoffs/:id/cancel', async (req, reply) => {
     const h = ownHandoff(req);
-    if (TERMINAL_STATES.includes(h.status)) {
+    if (TERMINAL_STATUSES.includes(h.status)) {
       throw fail(409, 'ERR_STATE', `handoff already ${h.status}`);
     }
     if (h.status === 'running' && sandbox?.worker) {
@@ -265,7 +266,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
   app.post('/api/handoffs/:id/pull-intent', async (req, reply) => {
     const h = ownHandoff(req);
-    if (!TERMINAL_STATES.includes(h.status)) {
+    if (!TERMINAL_STATUSES.includes(h.status)) {
       // 交互接力收尾：running 时主动触发打包，客户端轮询详情等终态（spec §4.2 注）
       if (h.status === 'running' && sandbox?.worker?.requestPackaging(h.id)) {
         throw fail(409, 'ERR_NOT_READY', 'packaging started, poll status until done');
@@ -348,7 +349,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
 
   // ── Bots（spec §4.2）──────────────────────────────────
-  const toBotSummary = (b: BotRow): BotSummary => ({
+  const toBot = (b: BotRow): Bot => ({
     id: b.id,
     name: b.name,
     status: b.status,
@@ -360,7 +361,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   app.get('/api/bots', async (req, reply) => {
     const { uid } = requireAuth(req);
     const rows = db.prepare("SELECT * FROM bots WHERE user_id=? AND status != 'deleted' ORDER BY id").all(uid) as BotRow[];
-    return reply.send({ items: rows.map(toBotSummary) });
+    return reply.send({ items: rows.map(toBot) });
   });
 
   app.post('/api/bots', async (req, reply) => {
@@ -394,7 +395,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         throw fail(502, 'ERR_K8S', `bot sandbox create failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    return reply.status(201).send(toBotSummary(getBot(db, id)!));
+    return reply.status(201).send(toBot(getBot(db, id)!));
   });
 
   app.delete('/api/bots/:id', async (req, reply) => {

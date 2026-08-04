@@ -1,26 +1,26 @@
 {
-  "name": "@agenthub/shared",
+  "name": "@agenthub/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
+  "bin": {
+    "agenthub": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --coverage"
+    "dev": "tsx src/index.ts",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@agenthub/shared": "workspace:*",
+    "ali-oss": "^6.21.0",
+    "commander": "^12.1.0",
     "tar": "^7.4.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@types/ali-oss": "^6.16.11",
     "@vitest/coverage-v8": "^4.1.10",
     "tsx": "^4.19.0",
     "vitest": "^4.1.10"
