@@ -85,3 +85,5 @@ local.properties
 *.tar.gz
 *.tgz
 *.7z
+sandbox-dist/
+hub-dist/

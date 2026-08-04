@@ -8,15 +8,17 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/runner.ts",
     "start": "node dist/runner.js",
-    "test": "node --test --import tsx src/**/*.test.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@agenthub/shared": "workspace:*",
     "fastify": "^5.2.0",
     "tar": "^7.4.0",
-    "undici": "^7.3.0"
+    "undici": "^7.3.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
-    "tsx": "^4.19.0"
+    "tsx": "^4.19.0",
+    "vitest": "^3.0.0"
   }
 }

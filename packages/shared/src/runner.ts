@@ -12,8 +12,17 @@ export const RunnerHealthzRespSchema = z.object({
   serveReady: z.boolean(),
   loadedHandoffId: z.string().optional(),
   lastError: z.string().optional(),
+  /** task relay 是否已完成（B 线 Worker 判断 task 续跑结束的依据） */
+  taskDone: z.boolean().optional(),
 });
 export type RunnerHealthzResp = z.infer<typeof RunnerHealthzRespSchema>;
+
+/** 聊天列表项（runner /chats 与 bot /api/bots/:id/chats 共用） */
+export interface ChatListItem {
+  chatId: string;
+  title?: string;
+  lastSeenAt?: string;
+}
 
 export const RunnerLoadReqSchema = z.object({
   inputUrl: z.string(),

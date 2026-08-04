@@ -8,20 +8,24 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "test": "node --test --import tsx src/**/*.test.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@agenthub/shared": "workspace:*",
-    "fastify": "^5.2.0",
-    "better-sqlite3": "^11.8.0",
+    "@fastify/static": "^10.1.2",
     "@kubernetes/client-node": "^1.0.0",
-    "undici": "^7.3.0",
+    "@node-rs/argon2": "^2.0.2",
     "ali-oss": "^6.21.0",
+    "better-sqlite3": "^12.11.1",
+    "fastify": "^5.2.0",
+    "undici": "^7.3.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
     "@types/ali-oss": "^6.16.11",
-    "tsx": "^4.19.0"
+    "@types/better-sqlite3": "^7.6.12",
+    "tar": "^7.5.22",
+    "tsx": "^4.19.0",
+    "vitest": "^3.0.0"
   }
 }

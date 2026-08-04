@@ -1,0 +1,8 @@
+# Hub 镜像（deploy/build-hub.sh 先 pnpm deploy 产出 hub-dist 再 build）
+ARG BASE_IMAGE=docker.m.daocloud.io/library/node:22-slim
+FROM ${BASE_IMAGE}
+WORKDIR /app
+COPY hub-dist/ ./
+ENV HUB_HOST=0.0.0.0
+EXPOSE 4180
+CMD ["node", "dist/index.js"]
