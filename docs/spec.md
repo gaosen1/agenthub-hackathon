@@ -465,9 +465,76 @@ spec:
 
 ---
 
-## 7. 验收清单（对齐里程碑）
+## 7. 分阶段测试与验收标准
 
-- **M1**：`packHandoff→unpackHandoff` 往返一致（单测）；手工构造返回包后 `agenthub pull` 三场景正确（无分叉/分叉/重复 pull 幂等）
-- **M2**：真实 push → Pod 内 `session/load` 恢复 20+ 轮上下文 → task 自动续跑产生 commit → pull 后本地 `qwen` 续聊、`git log` 可见云端 commit
-- **M3**：Web 聊天流式输出；钉钉群 A 两人 @ 共享 session、同一人群 B @ 隔离、`push --bot --chat` 后该群接续 pushed session 且群 B 不受影响
-- **M4**：3 分钟演示剧本连续 3 次成功；性能：push≤30s（500MB 内）、冷启动≤60s、pull≤10s
+> 每个阶段的产出必须通过当阶段全部验收项才算完成；联调检查点（CP）的验收由双方一起执行并在群里贴结果。
+
+### 阶段 D1：契约冻结 + 骨架
+
+**测试方法**
+- `shared`：vitest 单测——每个 zod schema 用合法/非法样本各至少 1 例；`packHandoff → unpackHandoff` 往返测试（含中文路径、空 worktree、大文件 >100MB 三个边界样本）
+- `hub-server`：vitest + supertest 起内存 SQLite，覆盖 auth 注册/登录/错 token，handoffs 创建→uploaded→queued 状态流转，非法流转（对 done 任务 cancel）返回 ERR_STATE
+- 集群准备：手工验证（不写代码）
+
+**验收标准**
+- [ ] `pnpm -r build && pnpm -r test` 全绿；shared 单测覆盖率 ≥ 80%（行）
+- [ ] 往返一致：解包后逐字节比对 workspace 文件 + manifest 字段全等
+- [ ] REST 骨架：上述 supertest 用例全过，错误响应格式符合 §2 统一格式
+- [ ] 集群：本地 kubectl 能建 nginx Pod 到 ACS 并 Running，删除后计费停止；`agenthub` ns、model Secret、ACR 仓库就绪
+
+### 阶段 D2–D3（上）：各自闭环
+
+**测试方法**
+- 合并器单测（高森）：四类场景各成独立用例——无分叉 append / 分叉交错 / 重复 pull 幂等 / 前缀不一致拒绝；git 合并用临时仓库 fixture 覆盖 fast-forward、有冲突保留标记、--branch 落独立分支三条路径
+- CLI 对 **mock Hub**（固定响应的 stub server）跑 push/pull 全流程，OSS 用真 bucket
+- runner 单机测（子剑）：不经 K8s，本地 `RUNNER_MODE=web node runner` + curl 手工包验证 /load → serveReady → /snapshot
+- Worker 对真集群测 Pod 创建/删除/超时回收（用 sleep 镜像代替 sandbox 镜像先验调度）
+
+**验收标准**
+- [ ] 合并器：四类场景单测全过；分叉合并后用真 qwen 加载合并后的 jsonl 能正常续聊（手工验证一次）
+- [ ] CLI：mock Hub 下 push 产出的包经 unpack 验证结构完整；手工构造返回包后 pull 三场景（无分叉/分叉/重复）结果正确
+- [ ] runner：本地 load 后 `curl :8081`（带 serve token）能 initialize + session/load 成功；snapshot 产出的包含 result.bundle 与全部 chats
+- [ ] Worker：Pod 超时后 ≤ 1 分钟内被回收；杀掉 hub-server 重启后能重新接管 running 任务或标记 failed，无孤儿 Pod 残留
+
+### CP-1（M1 验收，双方联调 ½ 天）
+
+**测试方法**：真 CLI + 真 Hub + 真 OSS（不经 sandbox）：push 一个真实项目 → Hub 状态到 queued → 手工把输入包改造成返回包上传 → 手工置 done → pull
+
+**验收标准**
+- [ ] 全流程无手工修数据库（除置 done 外）；状态时间线完整落库
+- [ ] pull 后代码与会话均正确合入；重复 pull 不重复合并
+- [ ] 鉴权：用户 A 的 token 访问用户 B 的 handoff 返回 403
+
+### 阶段 D2–D3（下）→ CP-2（M2 验收，双方联调 ½ 天）
+
+**测试方法**：真实链路端到端——本地用 qwen 对一个测试仓库聊 20+ 轮并改代码，`agenthub push --task "继续完成并补单测"` → 观察 Pod 自动续跑 → done 后 pull
+
+**验收标准**
+- [ ] Pod 内 session/load 成功恢复全部历史（日志可见轮数），无"失忆"现象（agent 能引用 push 前的讨论结论）
+- [ ] 云端自动产生 ≥ 1 个 commit；pull 后 `git log` 可见、本地 `qwen` 打开 session 可追问云端改动细节并得到基于上下文的回答
+- [ ] 失败路径：故意给错 inputUrl，任务进 failed 且 error 信息可读；超时任务进 expired 且部分成果在返回包中
+- [ ] 性能初测：冷启动（建 Pod 到 serveReady）≤ 60s，超标则记录瓶颈（镜像拉取/依赖安装）进 D6 优化项
+
+### 阶段 D4–D5 → CP-3（M3 验收，双方联调 ½ 天）
+
+**测试方法**
+- Web 线（高森）：hub-web 先对 mock 数据渲染验收各视图；再对真 Hub 联调 ACP 聊天
+- 钉钉线（子剑）：先用本地 `qwen serve --channel` + 真钉钉机器人验证多群路由与 /bind（不经 K8s），再上云重验
+- 联调脚本化：准备两个测试钉钉群（群 A 双人、群 B 单人）走完整剧本
+
+**验收标准**
+- [ ] Web：任务列表/详情/时间线/日志流与真实数据一致；聊天流式输出、断网 10s 重连后消息不丢不重（Last-Event-ID）
+- [ ] 钉钉多 session：群 A 两人先后 @ 机器人，第二人能看到第一人的上下文（同 session）；同一人在群 B @，agent 无群 A 上下文（隔离）
+- [ ] 绑定：`push --bot --chat 群A` 后群 A 下一条消息 agent 能引用 push 前本地讨论内容；群 B 会话不受影响；未知群绑定时 `GET /chats` 能在首次 @ 后学到该群
+- [ ] bot pull：返回包含各群全部 session，本地 `qwen --resume` 可接续任意一个
+- [ ] 安全：无 token 访问 chat 代理返回 401；bot secret 不出现在任何 API 响应与日志中
+
+### 阶段 D6（M4 验收，一起）
+
+**测试方法**：演示剧本（US-1 全流程 + US-4 多群）连续完整跑 3 次；性能用真实中型仓库（~100MB）计时 3 次取中位数；上云后用 DirectConnector 重跑 CP-2/CP-3 关键用例
+
+**验收标准**
+- [ ] 剧本 3 次全成，单次 ≤ 3 分钟口述节奏；任意一步失败有可当场执行的兼容预案（如预热备用 handoff）
+- [ ] 性能中位数：push ≤ 30s、冷启动 ≤ 60s、pull ≤ 10s
+- [ ] Hub 在集群内运行（DirectConnector）下 CP-2/CP-3 关键用例复验通过
+- [ ] 成本：演示结束后 `kubectl get pods -n agenthub` 除保留 bot 外无残留；OSS 临时对象有过期规则
