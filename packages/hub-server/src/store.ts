@@ -26,6 +26,7 @@ export interface HandoffRow {
   input_oss_key: string | null;
   output_oss_key: string | null;
   terminal_target: string | null;
+  result_manifest: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;

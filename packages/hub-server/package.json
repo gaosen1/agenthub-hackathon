@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@agenthub/shared": "workspace:*",
+    "@fastify/static": "^10.1.2",
     "@kubernetes/client-node": "^1.0.0",
     "@node-rs/argon2": "^2.0.2",
     "ali-oss": "^6.21.0",

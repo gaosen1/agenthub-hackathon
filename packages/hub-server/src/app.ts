@@ -3,6 +3,8 @@
  * buildApp 注入 db/signer/sandbox 依赖以便测试；index.ts 负责生产装配。
  */
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import fastifyStatic from '@fastify/static';
+import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { ZodError } from 'zod';
 import {
@@ -41,6 +43,8 @@ export interface AppOptions {
   secret: string;
   webBaseUrl?: string;
   sandbox?: SandboxDeps;
+  /** hub-web 构建产物目录，存在则静态托管（spec §4.1 组件表） */
+  webDistDir?: string;
 }
 
 const newHandoffId = () => `hf-${randomBytes(3).toString('hex')}`;
@@ -69,6 +73,16 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
 
   app.get('/healthz', async () => ({ ok: true, service: 'hub-server' }));
+
+  // 静态托管 hub-web 产物（部署只有一个服务）
+  if (opts.webDistDir && existsSync(opts.webDistDir)) {
+    void app.register(fastifyStatic, { root: opts.webDistDir, prefix: '/', wildcard: true });
+    app.setNotFoundHandler((req, reply) => {
+      // SPA fallback：非 /api 路径回 index.html
+      if (!req.url.startsWith('/api')) return reply.sendFile('index.html');
+      return reply.status(404).send({ error: { code: 'ERR_NOT_FOUND', message: 'not found' } });
+    });
+  }
 
   // ── 认证 ──────────────────────────────────────────────
   app.post('/api/auth/register', async (req, reply) => {
@@ -191,11 +205,20 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       .prepare("SELECT at, payload FROM handoff_events WHERE handoff_id=? AND kind='status' ORDER BY id")
       .all(h.id) as Array<{ at: string; payload: string }>).map((e) => ({ status: e.payload as HandoffStatus, at: e.at }));
     const detail: HandoffDetail = { ...toSummary(h), timeline, ...(h.error ? { error: h.error } : {}) };
-    if (TERMINAL_STATES.includes(h.status) && h.output_oss_key) {
-      try {
-        detail.downloadUrl = await signer.signGet(h.output_oss_key);
-      } catch {
-        // 下载 URL 签发失败不阻塞详情展示
+    if (TERMINAL_STATES.includes(h.status)) {
+      if (h.result_manifest) {
+        try {
+          detail.result = (JSON.parse(h.result_manifest) as { result?: unknown }).result;
+        } catch {
+          // 脏数据不阻塞详情
+        }
+      }
+      if (h.output_oss_key) {
+        try {
+          detail.downloadUrl = await signer.signGet(h.output_oss_key);
+        } catch {
+          // 下载 URL 签发失败不阻塞详情展示
+        }
       }
     }
     return reply.send(detail);
@@ -256,7 +279,15 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     } catch (e) {
       throw fail(502, 'ERR_OSS', `sign download url failed: ${e instanceof Error ? e.message : String(e)}`);
     }
-    return reply.send({ downloadUrl });
+    let manifest: unknown;
+    if (h.result_manifest) {
+      try {
+        manifest = JSON.parse(h.result_manifest);
+      } catch {
+        // 无 manifest 时 CLI 从包内读
+      }
+    }
+    return reply.send({ downloadUrl, ...(manifest !== undefined ? { manifest } : {}) });
   });
 
   // ── Chat 代理（spec §4.2）：透明反代 sandbox serve 的 /acp ──

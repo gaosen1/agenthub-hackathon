@@ -49,7 +49,14 @@ if (process.env.HUB_NO_K8S !== '1') {
   }
 }
 
-const app = buildApp({ db, signer, secret: SECRET, webBaseUrl: process.env.HUB_WEB_URL, sandbox });
+const app = buildApp({
+  db,
+  signer,
+  secret: SECRET,
+  webBaseUrl: process.env.HUB_WEB_URL,
+  sandbox,
+  webDistDir: process.env.HUB_WEB_DIST ?? new URL('../../hub-web/dist', import.meta.url).pathname,
+});
 
 app
   .listen({ port: PORT, host: process.env.HUB_HOST ?? '127.0.0.1' })

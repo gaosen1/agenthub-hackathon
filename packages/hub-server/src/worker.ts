@@ -36,6 +36,8 @@ export class Worker {
   private timer?: NodeJS.Timeout;
   private orphanTimer?: NodeJS.Timeout;
   private ticking = false;
+  /** runner 日志搬运游标（handoffId → nextAfter） */
+  private readonly logCursors = new Map<string, number>();
 
   constructor(
     private readonly db: DB,
@@ -147,6 +149,20 @@ export class Worker {
     }
   }
 
+  /** 搬运 runner 结构化日志到 handoff_events（spec §4.3 GET /logs） */
+  private async relayLogs(h: HandoffRow, runner: RunnerClient): Promise<void> {
+    try {
+      const after = this.logCursors.get(h.id) ?? 0;
+      const { items, nextAfter } = await runner.logs(after);
+      for (const e of items) {
+        recordEvent(this.db, h.id, 'log', JSON.stringify(e));
+      }
+      this.logCursors.set(h.id, nextAfter);
+    } catch {
+      // 日志搬运失败不影响主流程，下轮重试
+    }
+  }
+
   // running：搬运日志、检测 task 完成 / 硬超时 / 空闲 TTL
   private async handleRunning(): Promise<void> {
     const idleTtlMs = (this.cfg.idleTtlMinutes ?? 120) * 60_000;
@@ -154,6 +170,7 @@ export class Worker {
       try {
         const runner = await this.runnerOf(h);
         const health = await runner.healthz();
+        await this.relayLogs(h, runner);
         if (health.lastError) {
           this.enterPackaging(h, 'failed', health.lastError);
           continue;
@@ -196,14 +213,16 @@ export class Worker {
       const target = (h.terminal_target ?? 'done') as HandoffStatus;
       try {
         const runner = await this.runnerOf(h);
+        await this.relayLogs(h, runner);
         const outputKey = ossKeyOf(h.user_id, h.id, 'output.tar.gz');
         const outputUrl = await this.signer.signPut(outputKey);
-        await runner.snapshot({ outputUrl });
-        patchHandoff(this.db, h.id, { output_oss_key: outputKey });
+        const { manifest } = await runner.snapshot({ outputUrl });
+        patchHandoff(this.db, h.id, { output_oss_key: outputKey, result_manifest: JSON.stringify(manifest) });
         setStatus(this.db, h, target === 'failed' ? 'failed' : target);
       } catch (e) {
         setStatus(this.db, h, 'failed', `snapshot failed: ${msg(e)}`);
       } finally {
+        this.logCursors.delete(h.id);
         if (h.kind === 'web') await this.safeDeletePod(h);
         else if (h.bot_id) this.db.prepare('UPDATE bots SET current_handoff_id=NULL WHERE id=? AND current_handoff_id=?').run(h.bot_id, h.id);
       }

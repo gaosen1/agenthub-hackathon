@@ -41,10 +41,11 @@ interface FakeRunnerState {
   snapshots: unknown[];
   taskDone: boolean;
   lastError?: string;
+  logs: Array<{ t: string; tag: string; c: string }>;
 }
 
 function startFakeRunner(): Promise<{ url: string; state: FakeRunnerState; server: Server }> {
-  const state: FakeRunnerState = { loads: [], snapshots: [], taskDone: false };
+  const state: FakeRunnerState = { loads: [], snapshots: [], taskDone: false, logs: [] };
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
@@ -61,7 +62,12 @@ function startFakeRunner(): Promise<{ url: string; state: FakeRunnerState; serve
       }
       if (req.url === '/snapshot') {
         state.snapshots.push(JSON.parse(body || '{}'));
-        return send(200, { manifest: {} });
+        return send(200, { manifest: { version: 1, handoffId: 'hf-x', result: { status: 'done', commitCount: 2, newSessionIds: [], elapsedSeconds: 5 } } });
+      }
+      if (req.url?.startsWith('/logs')) {
+        const after = Number(new URL(req.url, 'http://x').searchParams.get('after') ?? 0);
+        const items = state.logs.slice(after);
+        return send(200, { items, nextAfter: after + items.length });
       }
       return send(404, {});
     });
@@ -134,12 +140,19 @@ describe('worker 全链路', () => {
     expect(getHandoff(db, 'hf-000001')!.status).toBe('running');
 
     runner.state.taskDone = true;
+    runner.state.logs.push({ t: 't1', tag: 'tool', c: 'edit_file x.ts' });
     await worker.tick(); // → packaging → snapshot → done + Pod 删除（同 tick）
     const done = getHandoff(db, 'hf-000001')!;
     expect(done.status).toBe('done');
     expect(done.output_oss_key).toBe('handoffs/1/hf-000001/output.tar.gz');
+    expect(done.result_manifest).toContain('commitCount');
     expect(runner.state.snapshots).toHaveLength(1);
     expect(orch.pods.size).toBe(0);
+    // 日志已搬运到 handoff_events（spec §4.3）
+    const logs = db
+      .prepare("SELECT payload FROM handoff_events WHERE handoff_id=? AND kind='log'")
+      .all('hf-000001') as Array<{ payload: string }>;
+    expect(logs.some((l) => l.payload.includes('edit_file x.ts'))).toBe(true);
   });
 
   it('带 task 的任务硬超时 → expired（部分成果仍打包）', async () => {
