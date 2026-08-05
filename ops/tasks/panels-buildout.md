@@ -196,7 +196,20 @@
   - `policy`：`{idleTtlMinutes, taskLingerMinutes, defaultTimeoutMinutes, orphanIntervalMs, workerIntervalMs}` 真配置
   - 验收：跨用户隔离测试（A 用户看不到 B 用户的 sandbox）
 
-- [ ] **S10 SandboxView 界面**
+- [x] **S10 SandboxView 界面** — 已完成（基线 180 → 187）。**Phase 1 完成，Sandbox 面板端到端打通。**
+  - 已按「原型虚构项 → 真实来源」逐条替换，并有测试断言 `E2B` / `v1.4.2` **不出现**在 DOM 里。
+  - `src/api/sandbox.ts` **不做 mock 回退**：面板宁可显示未配置/加载失败，也不能拿假数据冒充真实云端实例。
+    为此把 `hubFetch`/`AuthRequiredError` 从 `client.ts` 导出复用。
+  - 真机验证：起 hub-server（`HUB_NO_K8S=1`）→ `GET /api/sandboxes` 返回
+    `configured:false`/`template:null`/policy 缺省值；两个用户交叉验证隔离生效；`/sandbox` SPA 路由 200。
+  - ⚠️ **未做浏览器目视验证**（本环境无浏览器工具），渲染正确性靠 jsdom 测试覆盖。
+
+> ⚠️ **S11 优先级上调——发现一个启动阻塞问题**
+> `createOssSigner()` 在缺 `OSS_AK`/`OSS_SK` 时**直接抛异常**（ali-oss `initOptions` 要求 AK/SK），
+> 于是 `pnpm dev:hub` 在无 OSS 凭证的机器上**根本起不来**：
+> `Error: require accessKeyId, accessKeySecret at createOssSigner (src/oss.ts:18)`。
+> 这比原计划预判的「返回垃圾签名 URL」更严重——是启动阻塞，不是静默错误。
+> 本次验证只能靠临时塞 `OSS_BUCKET/OSS_AK/OSS_SK=dummy` 绕过。S11 的 `NullOssClient` 必须修掉它。
   - 文件：`src/views/SandboxView.tsx`、新 `src/api/sandbox.ts`（沿用 `client.ts` 的 `hubFetch`/`AuthRequiredError` 模式）
   - 真实行 + `gotoTask(id)` 深链（= `navigate('/tasks/' + id)`）+ 未配置空态
   - 日志按钮复用现有 `GET /api/handoffs/:id/events` 过滤 `kind='log'`；**bot 行无 handoff 时禁用**

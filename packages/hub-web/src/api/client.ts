@@ -22,13 +22,14 @@ const TOKEN_KEY = 'agenthub_token';
 export const getToken = (): string | null => localStorage.getItem(TOKEN_KEY);
 export const clearToken = (): void => localStorage.removeItem(TOKEN_KEY);
 
-class AuthRequiredError extends Error {
+export class AuthRequiredError extends Error {
   constructor() {
     super('未登录或 token 失效');
   }
 }
 
-async function hubFetch<T>(path: string, parse: (d: unknown) => T, init?: RequestInit): Promise<T> {
+/** 带 Bearer 的 JSON 请求；401 抛 AuthRequiredError。三个面板的 api 模块共用。 */
+export async function hubFetch<T>(path: string, parse: (d: unknown) => T, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string>) };
   const t = getToken();
   if (t) headers['authorization'] = `Bearer ${t}`;
