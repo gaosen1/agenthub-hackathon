@@ -1,33 +1,184 @@
 /**
- * OSS 签名 URL（spec §3.9 / §4.2）
- * 生产实现用 ali-oss signatureUrl；测试注入 FakeSigner。
+ * OSS 访问（spec §3.9 / §4.2）
+ *
+ * `OssSigner` 有意保持窄接口——worker 与 handoff 路由只需要签名，
+ * 且有 4 个测试 Fake 实现它。OSS 面板需要的列举/统计能力放在 `OssClient` 里。
  */
 import OSS from 'ali-oss';
+import { fail } from './state.js';
 
 export interface OssSigner {
-  /** PUT 上传签名 URL（30min） */
+  /** PUT 上传签名 URL */
   signPut(key: string): Promise<string>;
-  /** GET 下载签名 URL（30min） */
+  /** GET 下载签名 URL */
   signGet(key: string): Promise<string>;
+}
+
+export interface OssObject {
+  key: string;
+  size: number;
+  lastModified: string;
+  storageClass?: string;
+}
+
+export interface BucketInfo {
+  bucket: string;
+  region: string;
+  storageClass?: string;
+  /** 服务端加密算法（未开启则为 undefined） */
+  sse?: string;
+  /** handoffs/ 前缀的生命周期天数；面板据此算过期时间，不写死 7 */
+  lifecycleDays?: number;
+}
+
+/** 签名 URL 有效期。面板要显示这个值，所以必须是可读的常量而不是散落的字面量。 */
+export const SIGNED_URL_TTL_SECONDS = 1800;
+
+export interface OssClient extends OssSigner {
+  /** 未配置凭证时为 false，路由据此返回 configured:false 让面板渲染未配置态 */
+  readonly configured: boolean;
+  list(prefix: string, max?: number): Promise<{ objects: OssObject[]; truncated: boolean }>;
+  head(key: string): Promise<OssObject | null>;
+  bucketInfo(): Promise<BucketInfo | null>;
 }
 
 export const ossKeyOf = (userId: number, handoffId: string, file: 'input.tar.gz' | 'output.tar.gz') =>
   `handoffs/${userId}/${handoffId}/${file}`;
 
-export function createOssSigner(): OssSigner {
-  const client = new OSS({
-    region: process.env.OSS_REGION ?? 'oss-cn-hangzhou',
-    bucket: process.env.OSS_BUCKET,
-    accessKeyId: process.env.OSS_AK ?? '',
-    accessKeySecret: process.env.OSS_SK ?? '',
-    ...(process.env.OSS_STS_TOKEN ? { stsToken: process.env.OSS_STS_TOKEN } : {}),
-  });
-  return {
-    async signPut(key) {
-      return client.signatureUrl(key, { method: 'PUT', expires: 1800, 'Content-Type': 'application/gzip' });
-    },
-    async signGet(key) {
-      return client.signatureUrl(key, { method: 'GET', expires: 1800 });
-    },
-  };
+/** 某用户名下所有对象的 key 前缀 */
+export const userPrefix = (userId: number) => `handoffs/${userId}/`;
+
+/**
+ * 归属校验。**永不接受客户端传来的原始 key 去签名**——必须先确认它落在调用者
+ * 自己的前缀下，否则任何登录用户都能签出别人的输入包。
+ */
+export function assertOwnedKey(userId: number, key: string): void {
+  if (key.includes('..') || !key.startsWith(userPrefix(userId))) {
+    throw fail(403, 'ERR_FORBIDDEN', 'object not owned by caller');
+  }
+}
+
+/** 未配置 OSS 时的替身：签名直接报错，列举返回空，而不是伪造数据或在启动时崩掉 */
+class NullOssClient implements OssClient {
+  readonly configured = false;
+  async signPut(): Promise<string> {
+    throw fail(503, 'ERR_OSS', 'oss not configured');
+  }
+  async signGet(): Promise<string> {
+    throw fail(503, 'ERR_OSS', 'oss not configured');
+  }
+  async list() {
+    return { objects: [], truncated: false };
+  }
+  async head() {
+    return null;
+  }
+  async bucketInfo() {
+    return null;
+  }
+}
+
+class AliOssClient implements OssClient {
+  readonly configured = true;
+  private readonly client: OSS;
+
+  constructor(
+    private readonly bucket: string,
+    private readonly region: string,
+    ak: string,
+    sk: string,
+    stsToken?: string,
+  ) {
+    this.client = new OSS({
+      region,
+      bucket,
+      accessKeyId: ak,
+      accessKeySecret: sk,
+      ...(stsToken ? { stsToken } : {}),
+    });
+  }
+
+  async signPut(key: string): Promise<string> {
+    return this.client.signatureUrl(key, {
+      method: 'PUT',
+      expires: SIGNED_URL_TTL_SECONDS,
+      'Content-Type': 'application/gzip',
+    });
+  }
+
+  async signGet(key: string): Promise<string> {
+    return this.client.signatureUrl(key, { method: 'GET', expires: SIGNED_URL_TTL_SECONDS });
+  }
+
+  async list(prefix: string, max = 1000): Promise<{ objects: OssObject[]; truncated: boolean }> {
+    try {
+      const res = await this.client.listV2({ prefix, 'max-keys': max }, {});
+      const objects = (res.objects ?? []).map((o) => ({
+        key: o.name,
+        size: Number(o.size ?? 0),
+        lastModified: new Date(o.lastModified).toISOString(),
+        ...(o.storageClass ? { storageClass: o.storageClass } : {}),
+      }));
+      return { objects, truncated: res.isTruncated === true };
+    } catch (e) {
+      throw fail(502, 'ERR_OSS', `oss list failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async head(key: string): Promise<OssObject | null> {
+    try {
+      const res = await this.client.head(key);
+      const headers = res.res.headers as Record<string, string | undefined>;
+      return {
+        key,
+        size: Number(headers['content-length'] ?? 0),
+        lastModified: new Date(headers['last-modified'] ?? Date.now()).toISOString(),
+        ...(headers['x-oss-storage-class'] ? { storageClass: headers['x-oss-storage-class'] } : {}),
+      };
+    } catch (e) {
+      // 对象不存在（已过期被生命周期清理）是正常情况，不是错误
+      if ((e as { status?: number }).status === 404) return null;
+      throw fail(502, 'ERR_OSS', `oss head failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async bucketInfo(): Promise<BucketInfo | null> {
+    const info: BucketInfo = { bucket: this.bucket, region: this.region };
+    try {
+      const res = (await this.client.getBucketInfo(this.bucket)) as {
+        bucket?: { StorageClass?: string; ServerSideEncryptionRule?: { SSEAlgorithm?: string } };
+      };
+      if (res.bucket?.StorageClass) info.storageClass = res.bucket.StorageClass;
+      const sse = res.bucket?.ServerSideEncryptionRule?.SSEAlgorithm;
+      if (sse && sse !== 'None') info.sse = sse;
+    } catch {
+      // 没有 GetBucketInfo 权限时降级：仍返回名字与区域，不要整卡失败
+    }
+    try {
+      const rules = (await this.client.getBucketLifecycle(this.bucket)) as {
+        rules?: Array<{ prefix?: string; expiration?: { days?: string | number } }>;
+      };
+      const rule = (rules.rules ?? []).find((r) => (r.prefix ?? '').startsWith('handoffs'));
+      const days = Number(rule?.expiration?.days);
+      if (Number.isFinite(days) && days > 0) info.lifecycleDays = days;
+    } catch {
+      // 同上：生命周期规则读不到就不显示过期时间，不编一个 7
+    }
+    return info;
+  }
+}
+
+/**
+ * 装配 OSS 客户端。
+ *
+ * 缺凭证时返回 NullOssClient——此前的 `createOssSigner()` 会在 `new OSS(...)` 处
+ * 直接抛 `require accessKeyId, accessKeySecret`，导致 hub-server 在没有 OSS 凭证的
+ * 机器上**根本起不来**（本地开发与降级部署都被卡死）。对齐 HUB_NO_K8S 的先例。
+ */
+export function createOssClient(): OssClient {
+  const bucket = process.env.OSS_BUCKET;
+  const ak = process.env.OSS_AK;
+  const sk = process.env.OSS_SK;
+  if (process.env.HUB_NO_OSS === '1' || !bucket || !ak || !sk) return new NullOssClient();
+  return new AliOssClient(bucket, process.env.OSS_REGION ?? 'oss-cn-hangzhou', ak, sk, process.env.OSS_STS_TOKEN);
 }

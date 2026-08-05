@@ -7,7 +7,7 @@ import { dirname } from 'node:path';
 import { PortForward } from '@kubernetes/client-node';
 import { buildApp, type SandboxDeps } from './app.js';
 import { openDb } from './db.js';
-import { createOssSigner } from './oss.js';
+import { createOssClient } from './oss.js';
 import { DirectConnector, PortForwardConnector, type SandboxConnector } from './connector.js';
 import { K8sOrchestrator, loadKube, sandboxImage } from './k8s.js';
 import { Worker } from './worker.js';
@@ -24,7 +24,9 @@ if (!SECRET) {
 
 mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = openDb(DB_PATH);
-const signer = createOssSigner();
+// 缺 OSS 凭证时返回 NullOssClient，服务器照样启动（对齐 HUB_NO_K8S 降级）
+const oss = createOssClient();
+const signer = oss;
 
 // K8s 编排装配：kubeconfig 不可用时降级为纯控制面（HUB_NO_K8S=1 显式关闭）
 let sandbox: SandboxDeps | undefined;
