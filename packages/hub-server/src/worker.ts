@@ -296,7 +296,7 @@ export class Worker {
 
   /** 孤儿 Pod 清理：带 sandbox 标签但无活跃 handoff/bot 引用的一律删除 */
   async cleanupOrphans(): Promise<void> {
-    const pods = await this.orchestrator.listSandboxPodNames();
+    const pods = await this.orchestrator.listSandboxPods();
     const active = new Set<string>();
     for (const row of this.db
       .prepare("SELECT pod_name FROM handoffs WHERE pod_name IS NOT NULL AND status IN ('provisioning','running','packaging')")
@@ -309,9 +309,9 @@ export class Worker {
       active.add(row.pod_name);
     }
     for (const pod of pods) {
-      if (!active.has(pod)) {
-        recordSandboxReclaim(this.db, pod, 'reclaimed', 'orphan');
-        await this.orchestrator.deletePod(pod).catch(() => undefined);
+      if (!active.has(pod.name)) {
+        recordSandboxReclaim(this.db, pod.name, 'reclaimed', 'orphan');
+        await this.orchestrator.deletePod(pod.name).catch(() => undefined);
       }
     }
   }

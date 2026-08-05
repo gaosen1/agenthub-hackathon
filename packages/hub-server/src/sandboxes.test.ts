@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { openDb, type DB } from './db.js';
+import { phaseOf } from './k8s.js';
 import {
   recordSandboxCreate,
   recordSandboxReady,
@@ -123,5 +124,22 @@ describe('sandbox 历史记录', () => {
 
     // handoffs 表里从来没有 hf-deadbe，插入也不该被 foreign_keys=ON 拦下
     expect(only(db).handoff_id).toBe('hf-deadbe');
+  });
+});
+
+describe('phaseOf（getPodPhase 与 listSandboxPods 共用的相位判定）', () => {
+  it('Failed / Succeeded 都算 failed——Never 重启策略下跑完即终态', () => {
+    expect(phaseOf({ status: { phase: 'Failed' } })).toBe('failed');
+    expect(phaseOf({ status: { phase: 'Succeeded' } })).toBe('failed');
+  });
+
+  it('Ready 条件为 True 才算 ready', () => {
+    expect(phaseOf({ status: { phase: 'Running', conditions: [{ type: 'Ready', status: 'True' }] } })).toBe('ready');
+    expect(phaseOf({ status: { phase: 'Running', conditions: [{ type: 'Ready', status: 'False' }] } })).toBe('pending');
+  });
+
+  it('缺 status / 缺 conditions 时保守判为 pending', () => {
+    expect(phaseOf({})).toBe('pending');
+    expect(phaseOf({ status: { phase: 'Pending' } })).toBe('pending');
   });
 });

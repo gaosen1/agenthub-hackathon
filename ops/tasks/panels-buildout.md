@@ -153,7 +153,10 @@
   - 验收：`worker.test.ts` 断言一行走完 provisioning→running→reclaimed 且 `duration_seconds` 正确；
     bot pod 路径同样落行
 
-- [ ] **S7 `listSandboxPods()` 取代 `listSandboxPodNames()`**
+- [x] **S7 `listSandboxPods()` 取代 `listSandboxPodNames()`** — 已完成（基线 163 → 166）
+  - `SandboxPodInfo = {name, phase, startedAt?, labels}`；`phaseOf(pod)` 抽成导出的纯函数并单测
+    （`Failed`/`Succeeded` 都算 failed——`restartPolicy: Never` 下跑完即终态）。
+  - `startedAt` 可选：ACS virtual-kubelet 可能不给 `startTime`，S8 收养时回退 DB `created_at`。
   - 文件：`src/k8s.ts` + 3 个测试 Fake（`worker.test.ts`、`bots.test.ts`、`stack.e2e.test.ts`，各约 3 行）
   - 返回 `SandboxPodInfo[]` = `{name, phase, startedAt?, labels}`
   - **是替换不是并存**——两条 list 路径会在 `cleanupOrphans` 里漂移

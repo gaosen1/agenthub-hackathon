@@ -7,6 +7,22 @@ import type { RunnerMode } from '@agenthub/shared';
 
 export type PodPhase = 'pending' | 'ready' | 'failed' | 'gone';
 
+/** 集群里一个 sandbox Pod 的实况。startedAt 可选：ACS virtual-kubelet 可能不给 startTime。 */
+export interface SandboxPodInfo {
+  name: string;
+  phase: PodPhase;
+  startedAt?: string;
+  labels: Record<string, string>;
+}
+
+/** Pod → 相位的唯一判定，getPodPhase 与 listSandboxPods 共用，避免两处口径漂移 */
+export function phaseOf(pod: k8s.V1Pod): PodPhase {
+  const phase = pod.status?.phase;
+  if (phase === 'Failed' || phase === 'Succeeded') return 'failed';
+  const ready = pod.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
+  return ready ? 'ready' : 'pending';
+}
+
 export interface SandboxPodSpec {
   podName: string;
   mode: RunnerMode;
@@ -20,7 +36,8 @@ export interface PodOrchestrator {
   createPod(spec: SandboxPodSpec): Promise<void>;
   deletePod(podName: string): Promise<void>;
   getPodPhase(podName: string): Promise<PodPhase>;
-  listSandboxPodNames(): Promise<string[]>;
+  /** 取代原先只返回名字的 listSandboxPodNames——并存会让孤儿清理与面板对「存活 Pod」的口径漂移 */
+  listSandboxPods(): Promise<SandboxPodInfo[]>;
   createSecret(name: string, data: Record<string, string>): Promise<void>;
   deleteSecret(name: string): Promise<void>;
 }
@@ -118,15 +135,23 @@ export class K8sOrchestrator implements PodOrchestrator {
       if (isNotFound(e)) return 'gone';
       throw e;
     }
-    const phase = pod.status?.phase;
-    if (phase === 'Failed' || phase === 'Succeeded') return 'failed';
-    const ready = pod.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
-    return ready ? 'ready' : 'pending';
+    return phaseOf(pod);
   }
 
-  async listSandboxPodNames(): Promise<string[]> {
+  async listSandboxPods(): Promise<SandboxPodInfo[]> {
     const res = await this.core.listNamespacedPod({ namespace: this.cfg.namespace, labelSelector: SANDBOX_LABEL });
-    return res.items.map((p) => p.metadata?.name ?? '').filter(Boolean);
+    return res.items
+      .filter((p) => p.metadata?.name)
+      .map((p) => {
+        const startedAt = p.status?.startTime;
+        return {
+          name: p.metadata!.name!,
+          phase: phaseOf(p),
+          // ACS virtual-kubelet 的 Pod 可能不给 startTime，故为可选；调用方回退 DB created_at
+          ...(startedAt ? { startedAt: new Date(startedAt).toISOString() } : {}),
+          labels: p.metadata?.labels ?? {},
+        };
+      });
   }
 
   async createSecret(name: string, data: Record<string, string>): Promise<void> {

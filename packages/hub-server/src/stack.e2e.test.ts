@@ -39,8 +39,8 @@ class FakeOrchestrator implements PodOrchestrator {
   async getPodPhase(name: string): Promise<PodPhase> {
     return this.pods.get(name) ?? 'gone';
   }
-  async listSandboxPodNames() {
-    return [...this.pods.keys()];
+  async listSandboxPods() {
+    return [...this.pods.entries()].map(([name, phase]) => ({ name, phase, labels: {} }));
   }
   async createSecret() {}
   async deleteSecret() {}
