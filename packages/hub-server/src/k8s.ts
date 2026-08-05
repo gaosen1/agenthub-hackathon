@@ -62,6 +62,22 @@ export const DEFAULT_SANDBOX_IMAGE =
 
 export const sandboxImage = (): string => process.env.SANDBOX_IMAGE ?? DEFAULT_SANDBOX_IMAGE;
 
+/** Pod 资源与端口。createPod 与 Sandbox 面板的模板卡片共用，避免面板另抄一遍数字。 */
+export const SANDBOX_RESOURCES = { cpu: '2', memory: '4Gi' } as const;
+export const SANDBOX_PORTS = { runner: 8080, serve: 8081 } as const;
+
+/**
+ * 镜像内容描述。这些事实只有 `packages/sandbox/Dockerfile` 知道，运行期无从探知，
+ * 所以在此登记——**改 Dockerfile 时必须同步改这里**。
+ * 原型上那些「已发布」badge、构建日期、工具链 chips 都没有真实来源，只能出自这里，
+ * 但绝不能写死在前端 JSX 里。
+ */
+export const SANDBOX_TEMPLATE = {
+  baseImage: 'node:22-slim',
+  qwenVersion: '0.20.1',
+  toolchain: ['Node.js 22', 'Qwen Code 0.20.1', 'git', 'ripgrep', 'procps'],
+} as const;
+
 export function loadKube(): k8s.KubeConfig {
   const kc = new k8s.KubeConfig();
   if (process.env.HUB_IN_CLUSTER === '1') kc.loadFromCluster();
@@ -100,15 +116,15 @@ export class K8sOrchestrator implements PodOrchestrator {
             name: 'sandbox',
             image: this.cfg.image,
             imagePullPolicy: 'IfNotPresent',
-            ports: [{ containerPort: 8080 }, { containerPort: 8081 }],
+            ports: [{ containerPort: SANDBOX_PORTS.runner }, { containerPort: SANDBOX_PORTS.serve }],
             env: Object.entries({ RUNNER_MODE: spec.mode, ...spec.env }).map(([name, value]) => ({ name, value })),
             envFrom: spec.secretRefs.map((name) => ({ secretRef: { name, optional: true } })),
             resources: {
-              requests: { cpu: '2', memory: '4Gi' },
-              limits: { cpu: '2', memory: '4Gi' },
+              requests: { ...SANDBOX_RESOURCES },
+              limits: { ...SANDBOX_RESOURCES },
             },
             readinessProbe: {
-              httpGet: { path: '/healthz', port: 8080 },
+              httpGet: { path: '/healthz', port: SANDBOX_PORTS.runner },
               initialDelaySeconds: 2,
               periodSeconds: 3,
             },

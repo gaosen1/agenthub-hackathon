@@ -48,6 +48,8 @@ export class Worker {
   private timer?: NodeJS.Timeout;
   private orphanTimer?: NodeJS.Timeout;
   private ticking = false;
+  private intervalMs = 5000;
+  private orphanIntervalMs = 600_000;
   /** runner 日志搬运游标（handoffId → nextAfter） */
   private readonly logCursors = new Map<string, number>();
 
@@ -59,7 +61,19 @@ export class Worker {
     private readonly cfg: WorkerConfig,
   ) {}
 
+  /** 面板「回收与超时策略」卡片的真实数据源——前端不要重述原型文案 */
+  policy(): { idleTtlMinutes: number; taskLingerMinutes: number; orphanIntervalMs: number; workerIntervalMs: number } {
+    return {
+      idleTtlMinutes: this.cfg.idleTtlMinutes ?? 120,
+      taskLingerMinutes: this.cfg.taskLingerMinutes ?? 0,
+      orphanIntervalMs: this.orphanIntervalMs,
+      workerIntervalMs: this.intervalMs,
+    };
+  }
+
   start(intervalMs = 5000, orphanIntervalMs = 600_000): void {
+    this.intervalMs = intervalMs;
+    this.orphanIntervalMs = orphanIntervalMs;
     this.timer = setInterval(() => void this.tick().catch(() => undefined), intervalMs);
     this.timer.unref?.();
     this.orphanTimer = setInterval(() => void this.cleanupOrphans().catch(() => undefined), orphanIntervalMs);

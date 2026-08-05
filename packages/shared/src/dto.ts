@@ -144,3 +144,84 @@ export const BindChatReqSchema = z.object({
   sessionId: z.string().min(1),
 });
 export type BindChatReq = z.infer<typeof BindChatReqSchema>;
+
+// ---------- Sandbox 面板（原型 §view-sandbox） ----------
+
+export const SandboxStatusSchema = z.enum(['provisioning', 'running', 'reclaimed', 'failed', 'lost']);
+export type SandboxStatusDto = z.infer<typeof SandboxStatusSchema>;
+
+export const ReclaimReasonSchema = z.enum([
+  'task-done',
+  'task-failed',
+  'expired',
+  'cancelled',
+  'pod-failed',
+  'load-failed',
+  'pod-lost',
+  'bot-deleted',
+  'orphan',
+  'crash-recover',
+]);
+export type ReclaimReasonDto = z.infer<typeof ReclaimReasonSchema>;
+
+export const SandboxInstanceSchema = z.object({
+  podName: z.string(),
+  kind: z.enum(['web', 'bot']),
+  handoffId: z.string().nullable(),
+  botId: z.number().nullable(),
+  image: z.string(),
+  status: SandboxStatusSchema,
+  createdAt: z.string(),
+  readyAt: z.string().nullable(),
+  endedAt: z.string().nullable(),
+  /** 执行时长（秒），按 readyAt → endedAt 计；从未就绪的实例为 null */
+  durationSeconds: z.number().nullable(),
+  reclaimReason: ReclaimReasonSchema.nullable(),
+  lastError: z.string().nullable(),
+});
+export type SandboxInstance = z.infer<typeof SandboxInstanceSchema>;
+
+export const SandboxStatsSchema = z.object({
+  running: z.number(),
+  reclaimedInWindow: z.number(),
+  /** 可用模板数；当前单一 SANDBOX_IMAGE，故为 1（未配置编排时 0） */
+  templates: z.number(),
+  /** 窗口内累计执行秒数，含仍在运行实例的当前时长 */
+  execSecondsInWindow: z.number(),
+});
+export type SandboxStats = z.infer<typeof SandboxStatsSchema>;
+
+/** 模板信息。事实源头是 packages/sandbox/Dockerfile 与建 Pod 时的资源规格。 */
+export const SandboxTemplateSchema = z.object({
+  image: z.string(),
+  namespace: z.string(),
+  baseImage: z.string(),
+  qwenVersion: z.string(),
+  toolchain: z.array(z.string()),
+  resources: z.object({ cpu: z.string(), memory: z.string() }),
+  ports: z.object({ runner: z.number(), serve: z.number() }),
+  /** ACS 弹性算力调度（virtual-kubelet） */
+  acs: z.boolean(),
+});
+export type SandboxTemplate = z.infer<typeof SandboxTemplateSchema>;
+
+/** 回收与超时策略——取自 Worker 的实际配置，不是前端写死的文案 */
+export const SandboxPolicySchema = z.object({
+  defaultTimeoutMinutes: z.number(),
+  idleTtlMinutes: z.number(),
+  taskLingerMinutes: z.number(),
+  orphanIntervalMs: z.number(),
+  workerIntervalMs: z.number(),
+});
+export type SandboxPolicy = z.infer<typeof SandboxPolicySchema>;
+
+export const SandboxListRespSchema = z.object({
+  /** 编排是否可用（HUB_NO_K8S=1 或 kubeconfig 不可用时为 false，面板渲染未配置态） */
+  configured: z.boolean(),
+  windowHours: z.number(),
+  items: z.array(SandboxInstanceSchema),
+  stats: SandboxStatsSchema,
+  template: SandboxTemplateSchema.nullable(),
+  policy: SandboxPolicySchema,
+});
+export type SandboxListResp = z.infer<typeof SandboxListRespSchema>;

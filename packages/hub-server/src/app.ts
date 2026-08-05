@@ -19,6 +19,7 @@ import {
   type HandoffResult,
   type HandoffStatus,
   type HandoffSummary,
+  type SandboxListResp,
 } from '@agenthub/shared';
 import type { DB } from './db.js';
 import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
@@ -36,10 +37,11 @@ import {
   setStatus,
   type BotRow,
   type HandoffRow,
+  type SandboxRow,
 } from './store.js';
 import { RunnerClient } from './runner-client.js';
 import type { SandboxConnector } from './connector.js';
-import type { PodOrchestrator } from './k8s.js';
+import { SANDBOX_PORTS, SANDBOX_RESOURCES, SANDBOX_TEMPLATE, type PodOrchestrator } from './k8s.js';
 import type { Worker } from './worker.js';
 
 export interface SandboxDeps {
@@ -60,6 +62,9 @@ export interface AppOptions {
   /** hub-web 构建产物目录，存在则静态托管（spec §4.1 组件表） */
   webDistDir?: string;
 }
+
+/** handoffs.timeout_minutes 的建表缺省值（db.ts 基线 DDL），设置面板与 sandbox 策略卡共用 */
+export const DEFAULT_HANDOFF_TIMEOUT_MINUTES = 30;
 
 const newHandoffId = () => `hf-${randomBytes(3).toString('hex')}`;
 const newToken = () => randomBytes(24).toString('base64url');
@@ -362,6 +367,86 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         .finally(() => raw.end());
       raw.on('close', () => void reader.cancel().catch(() => undefined));
     },
+  });
+
+  // ── Sandbox 面板（原型 §view-sandbox）─────────────────
+  app.get('/api/sandboxes', async (req, reply) => {
+    const { uid } = requireAuth(req);
+    const q = (req.query ?? {}) as { windowHours?: string };
+    // 非法或非正数一律回落到 24h 默认窗口；合法值夹在 1..720h（30 天）之间
+    const requested = Number(q.windowHours ?? 24);
+    const windowHours = Number.isFinite(requested) && requested > 0 ? Math.min(Math.max(requested, 1), 720) : 24;
+    const since = new Date(Date.now() - windowHours * 3_600_000).toISOString();
+
+    // 仍开着的、或窗口内结束的，都要显示；恒按 user_id 过滤，跨用户不可见
+    const rows = db
+      .prepare(
+        `SELECT * FROM sandboxes
+          WHERE user_id=@uid AND (ended_at IS NULL OR ended_at > @since)
+          ORDER BY created_at DESC, id DESC`,
+      )
+      .all({ uid, since }) as SandboxRow[];
+
+    const agg = db
+      .prepare(
+        `SELECT
+           COUNT(*) FILTER (WHERE status IN ('provisioning','running')) AS running,
+           COUNT(*) FILTER (WHERE ended_at > @since)                   AS reclaimed,
+           COALESCE(SUM(duration_seconds) FILTER (WHERE ended_at > @since), 0) AS finished_seconds,
+           -- 仍在跑的实例也要计入，否则一个跑了半小时的 sandbox 会报 0
+           COALESCE(SUM(
+             CASE WHEN status IN ('provisioning','running') AND ready_at IS NOT NULL
+               THEN CAST(ROUND((julianday('now') - julianday(ready_at)) * 86400) AS INTEGER) END
+           ), 0) AS live_seconds
+         FROM sandboxes WHERE user_id=@uid`,
+      )
+      .get({ uid, since }) as { running: number; reclaimed: number; finished_seconds: number; live_seconds: number };
+
+    const workerPolicy = sandbox?.worker?.policy();
+    const body: SandboxListResp = {
+      configured: sandbox !== undefined,
+      windowHours,
+      items: rows.map((s) => ({
+        podName: s.pod_name,
+        kind: s.kind,
+        handoffId: s.handoff_id,
+        botId: s.bot_id,
+        image: s.image,
+        status: s.status,
+        createdAt: s.created_at,
+        readyAt: s.ready_at,
+        endedAt: s.ended_at,
+        durationSeconds: s.duration_seconds,
+        reclaimReason: s.reclaim_reason,
+        lastError: s.last_error,
+      })),
+      stats: {
+        running: agg.running,
+        reclaimedInWindow: agg.reclaimed,
+        templates: sandbox ? 1 : 0,
+        execSecondsInWindow: agg.finished_seconds + agg.live_seconds,
+      },
+      template: sandbox
+        ? {
+            image: sandbox.image,
+            namespace: sandbox.namespace,
+            ...SANDBOX_TEMPLATE,
+            toolchain: [...SANDBOX_TEMPLATE.toolchain],
+            resources: { ...SANDBOX_RESOURCES },
+            ports: { ...SANDBOX_PORTS },
+            acs: process.env.SANDBOX_ACS !== '0',
+          }
+        : null,
+      // 无 worker（HUB_NO_K8S）时给出与实现一致的缺省值，面板仍要能渲染
+      policy: {
+        defaultTimeoutMinutes: DEFAULT_HANDOFF_TIMEOUT_MINUTES,
+        idleTtlMinutes: workerPolicy?.idleTtlMinutes ?? 120,
+        taskLingerMinutes: workerPolicy?.taskLingerMinutes ?? 0,
+        orphanIntervalMs: workerPolicy?.orphanIntervalMs ?? 600_000,
+        workerIntervalMs: workerPolicy?.workerIntervalMs ?? 5000,
+      },
+    };
+    return reply.send(body);
   });
 
   // ── Bots（spec §4.2）──────────────────────────────────

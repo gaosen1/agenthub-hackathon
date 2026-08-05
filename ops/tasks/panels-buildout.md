@@ -177,7 +177,13 @@
   - **没有这一步，行会永久卡在 running**
   - 验收：孤儿行 → `lost`；存活 pod → 被收养
 
-- [ ] **S9 `GET /api/sandboxes`**
+- [x] **S9 `GET /api/sandboxes`** — 已完成（基线 173 → 180）
+  - 模板信息来自 `k8s.ts` 的 `SANDBOX_TEMPLATE`（Dockerfile 登记，改 Dockerfile 要同步改）
+    \+ `SANDBOX_RESOURCES`/`SANDBOX_PORTS`——后两个与 `createPod` 共用，**面板不会和真实 Pod 规格漂移**。
+  - 策略卡数据来自新增的 `Worker.policy()`（真实 `idleTtl`/`taskLinger`/两个 interval），不是前端重述文案。
+  - `execSecondsInWindow` **把仍在运行的实例算进去**，否则一个跑了半小时的 sandbox 会报 0。
+  - `windowHours` 非法/非正 → 回落 24h，合法值夹在 1..720h。
+  - 未配置编排时 `configured=false`、`template=null`，但 policy 仍给出与实现一致的缺省值，面板照样渲染。
   - 文件：`packages/shared/src/dto.ts`、`packages/hub-server/src/app.ts`
   - `GET /api/sandboxes?window=24h` → `{items, stats, template, policy}`，**恒带 `WHERE user_id=uid`**
   - `stats`：运行中 = `COUNT WHERE status IN ('provisioning','running')`；
