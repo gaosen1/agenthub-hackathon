@@ -12,9 +12,11 @@ import type { PodOrchestrator } from './k8s.js';
 import type { PodRef, SandboxConnector } from './connector.js';
 import { RunnerClient } from './runner-client.js';
 import {
+  adoptSandbox,
   getBot,
   getHandoff,
   listByStatus,
+  listOpenSandboxes,
   nowIso,
   patchHandoff,
   recordEvent,
@@ -276,8 +278,54 @@ export class Worker {
     return true;
   }
 
+  /**
+   * 重启对账：库里「开着的行」与集群实况互相校准。
+   *
+   * 没有这一步，hub 崩溃期间消失的 Pod 会让行永久停在 running，
+   * 面板上的「运行中」与「累计执行时长」会一直虚高。
+   */
+  async reconcileSandboxes(): Promise<void> {
+    let pods;
+    try {
+      pods = await this.orchestrator.listSandboxPods();
+    } catch {
+      // 集群暂时不可达不该拖垮恢复流程，下次重启或孤儿清理再对账
+      return;
+    }
+    const live = new Map(pods.map((p) => [p.name, p]));
+    const open = new Set<string>();
+    for (const row of listOpenSandboxes(this.db)) {
+      if (live.has(row.pod_name)) open.add(row.pod_name);
+      else recordSandboxReclaim(this.db, row.pod_name, 'lost', 'crash-recover');
+    }
+
+    // 反向：Pod 活着但库里没有开着的行（建 Pod 后 hub 就崩了，或库被重建）
+    for (const p of pods) {
+      if (open.has(p.name)) continue;
+      const owner = Number(p.labels['agenthub/owner']);
+      // 没有可用 owner 标签的 Pod 不是我们能归属的，交给孤儿清理，别凭空编个用户
+      if (!Number.isInteger(owner) || owner <= 0) continue;
+      const kind = p.labels['agenthub/kind'] === 'bot' ? 'bot' : 'web';
+      const botLabel = Number(p.labels['agenthub/bot']);
+      const startedAt = p.startedAt ?? nowIso();
+      adoptSandbox(this.db, {
+        podName: p.name,
+        userId: owner,
+        kind,
+        handoffId: p.labels['agenthub/handoff'] ?? null,
+        botId: Number.isInteger(botLabel) && botLabel > 0 ? botLabel : null,
+        image: this.cfg.image,
+        namespace: this.cfg.namespace,
+        status: p.phase === 'ready' ? 'running' : 'provisioning',
+        createdAt: startedAt,
+        readyAt: p.phase === 'ready' ? startedAt : null,
+      });
+    }
+  }
+
   /** 崩溃恢复：启动时扫描执行态任务，不可达则 failed 并回收 */
   async recover(): Promise<void> {
+    await this.reconcileSandboxes();
     for (const status of ['provisioning', 'running', 'packaging'] as const) {
       for (const h of listByStatus(this.db, status)) {
         if (!h.pod_name) {

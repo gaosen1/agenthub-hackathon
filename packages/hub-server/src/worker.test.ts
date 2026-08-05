@@ -15,18 +15,30 @@ class FakeOrchestrator implements PodOrchestrator {
   pods = new Map<string, PodPhase>();
   secrets = new Map<string, Record<string, string>>();
   created: SandboxPodSpec[] = [];
+  /** 每个 Pod 的标签与起始时间；对账测试可直接塞进来模拟集群里已存在的 Pod */
+  podMeta = new Map<string, { labels: Record<string, string>; startedAt?: string }>();
   async createPod(spec: SandboxPodSpec) {
     this.created.push(spec);
     this.pods.set(spec.podName, 'ready');
+    this.podMeta.set(spec.podName, { labels: { app: 'agenthub-sandbox', ...spec.labels } });
   }
   async deletePod(name: string) {
     this.pods.delete(name);
+    this.podMeta.delete(name);
   }
   async getPodPhase(name: string): Promise<PodPhase> {
     return this.pods.get(name) ?? 'gone';
   }
   async listSandboxPods() {
-    return [...this.pods.entries()].map(([name, phase]) => ({ name, phase, labels: {} }));
+    return [...this.pods.entries()].map(([name, phase]) => {
+      const meta = this.podMeta.get(name);
+      return {
+        name,
+        phase,
+        labels: meta?.labels ?? {},
+        ...(meta?.startedAt ? { startedAt: meta.startedAt } : {}),
+      };
+    });
   }
   async createSecret(name: string, data: Record<string, string>) {
     this.secrets.set(name, data);
@@ -329,5 +341,109 @@ describe('sandbox 实例历史（S6 写入点）', () => {
 
     // bot pod 的行由 POST /api/bots 负责，worker 这条路径不该凭空造行
     expect(sandboxRows()).toHaveLength(0);
+  });
+});
+
+describe('重启对账 reconcileSandboxes（S8）', () => {
+  const sandboxRows = () =>
+    db.prepare('SELECT * FROM sandboxes ORDER BY id').all() as Array<{
+      pod_name: string;
+      user_id: number;
+      kind: string;
+      handoff_id: string | null;
+      bot_id: number | null;
+      status: string;
+      created_at: string;
+      ready_at: string | null;
+      reclaim_reason: string | null;
+    }>;
+
+  it('行开着但 Pod 已消失 → lost/crash-recover，不留永久 running', async () => {
+    insertHandoff(db, { id: 'hf-000201' });
+    await worker.tick();
+    expect(sandboxRows()[0]!.status).toBe('running');
+
+    orch.pods.clear(); // 模拟 hub 崩溃期间 Pod 被回收
+    await worker.reconcileSandboxes();
+
+    const [s] = sandboxRows();
+    expect(s!.status).toBe('lost');
+    expect(s!.reclaim_reason).toBe('crash-recover');
+  });
+
+  it('Pod 活着但库里没有开着的行 → 按标签收养，并回填 Pod 起始时间', async () => {
+    const startedAt = new Date(Date.now() - 300_000).toISOString();
+    orch.pods.set('ah-web-adopted', 'ready');
+    orch.podMeta.set('ah-web-adopted', {
+      startedAt,
+      labels: { 'agenthub/kind': 'web', 'agenthub/owner': '7', 'agenthub/handoff': 'hf-adopted' },
+    });
+
+    await worker.reconcileSandboxes();
+
+    const [s] = sandboxRows();
+    expect(s!.pod_name).toBe('ah-web-adopted');
+    expect(s!.user_id).toBe(7);
+    expect(s!.kind).toBe('web');
+    expect(s!.handoff_id).toBe('hf-adopted');
+    // ready 的 Pod 直接当 running，且不把它报成「刚创建」
+    expect(s!.status).toBe('running');
+    expect(s!.created_at).toBe(startedAt);
+    expect(s!.ready_at).toBe(startedAt);
+  });
+
+  it('收养 bot pod 时带上 bot_id', async () => {
+    orch.pods.set('ah-bot-3-ops', 'ready');
+    orch.podMeta.set('ah-bot-3-ops', {
+      labels: { 'agenthub/kind': 'bot', 'agenthub/owner': '7', 'agenthub/bot': '3' },
+    });
+
+    await worker.reconcileSandboxes();
+
+    const [s] = sandboxRows();
+    expect(s!.kind).toBe('bot');
+    expect(s!.bot_id).toBe(3);
+    expect(s!.handoff_id).toBeNull();
+  });
+
+  it('未就绪的 Pod 收养为 provisioning，不假装已 ready', async () => {
+    orch.pods.set('ah-web-pending', 'pending');
+    orch.podMeta.set('ah-web-pending', { labels: { 'agenthub/kind': 'web', 'agenthub/owner': '7' } });
+
+    await worker.reconcileSandboxes();
+
+    const [s] = sandboxRows();
+    expect(s!.status).toBe('provisioning');
+    expect(s!.ready_at).toBeNull();
+  });
+
+  it('缺 owner 标签的 Pod 不收养——不凭空编造归属', async () => {
+    orch.pods.set('ah-web-nolabel', 'ready');
+    orch.podMeta.set('ah-web-nolabel', { labels: { 'agenthub/kind': 'web' } });
+
+    await worker.reconcileSandboxes();
+
+    expect(sandboxRows()).toHaveLength(0);
+  });
+
+  it('已有开着的行时不重复收养', async () => {
+    insertHandoff(db, { id: 'hf-000202' });
+    await worker.tick();
+    expect(sandboxRows()).toHaveLength(1);
+
+    await worker.reconcileSandboxes();
+
+    expect(sandboxRows()).toHaveLength(1);
+  });
+
+  it('集群不可达时静默返回，不拖垮恢复流程', async () => {
+    insertHandoff(db, { id: 'hf-000203' });
+    await worker.tick();
+    orch.listSandboxPods = async () => {
+      throw new Error('cluster unreachable');
+    };
+
+    await expect(worker.reconcileSandboxes()).resolves.toBeUndefined();
+    expect(sandboxRows()[0]!.status).toBe('running');
   });
 });

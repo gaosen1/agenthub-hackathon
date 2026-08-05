@@ -163,7 +163,13 @@
   - 把 phase 判断抽成 `phaseOf(pod: V1Pod)`，让 `getPodPhase` 和 `listSandboxPods` 共用一个真相
   - `startedAt` 必须可选：ACS virtual-kubelet pod 可能不给，回退到 DB `created_at`
 
-- [ ] **S8 重启对账 `reconcileSandboxes()`**
+- [x] **S8 重启对账 `reconcileSandboxes()`** — 已完成（基线 166 → 173）
+  - 双向对账：开着的行但 Pod 没了 → `lost`/`crash-recover`；Pod 活着但没有开着的行 → 按
+    `agenthub/owner|kind|handoff|bot` 标签收养。
+  - 新增 `adoptSandbox()` 而不复用 `recordSandboxCreate()`：后者把 `created_at` 打成「现在」
+    且一律从 provisioning 起步，会把一个已经跑了半小时的 Pod 报成刚创建、未就绪。
+  - **不凭空编造归属**：owner 标签缺失或非正整数的 Pod 直接跳过，交给孤儿清理。
+  - 集群不可达时静默返回，不拖垮 `recover()`。
   - 文件：`src/worker.ts`（在 `recover()` 开头调用）
   - 存活 pod 列表 vs DB：`status IN ('provisioning','running')` 而 pod 已不存在
     → `lost` + `ended_at`，reason `crash-recover`

@@ -170,3 +170,34 @@ export function recordSandboxReclaim(
       WHERE pod_name=@podName AND status IN ${OPEN_STATUSES}`,
   ).run({ podName, status, reason, error: error ?? null, at: nowIso() });
 }
+
+/** 尚未结束的实例行 */
+export const listOpenSandboxes = (db: DB): SandboxRow[] =>
+  db.prepare(`SELECT * FROM sandboxes WHERE status IN ${OPEN_STATUSES}`).all() as SandboxRow[];
+
+/**
+ * 收养：集群里活着、但库里没有开着的行的 Pod（hub 在 Pod 创建后崩溃，或库被重建）。
+ *
+ * 不能复用 recordSandboxCreate——它把 created_at 打成「现在」且一律从 provisioning 起步，
+ * 会把一个已经跑了半小时的 Pod 报成刚创建、未就绪。
+ */
+export function adoptSandbox(
+  db: DB,
+  s: {
+    podName: string;
+    userId: number;
+    kind: 'web' | 'bot';
+    handoffId: string | null;
+    botId: number | null;
+    image: string;
+    namespace: string;
+    status: Extract<SandboxStatus, 'provisioning' | 'running'>;
+    createdAt: string;
+    readyAt: string | null;
+  },
+): void {
+  db.prepare(
+    `INSERT INTO sandboxes (pod_name, user_id, kind, handoff_id, bot_id, image, namespace, status, created_at, ready_at)
+     VALUES (@podName, @userId, @kind, @handoffId, @botId, @image, @namespace, @status, @createdAt, @readyAt)`,
+  ).run(s);
+}
