@@ -65,6 +65,39 @@ CREATE INDEX IF NOT EXISTS idx_events_handoff ON handoff_events(handoff_id, id);
 `;
 
 /**
+ * 第 2 条：sandbox 实例历史（S5）。
+ *
+ * 为什么不能从 handoffs 推导：
+ * (1) bot pod 由 POST /api/bots 创建，一个 pod 顺序服务 N 个 handoff，没有 1:1 关系；
+ * (2) 「执行时长」必须是 ready_at → ended_at，而不是 handoff 的墙上时间；
+ * (3) pod 删除后仍要能回答「24h 内已回收多少」，所以行必须比 pod 活得久。
+ *
+ * handoff_id / bot_id 故意不加外键：库开了 foreign_keys=ON，而历史行要能比它引用的
+ * handoff/bot 行活得更久（孤儿 pod 被收养时，对应 handoff 可能已被清理）。
+ */
+const MIGRATION_SANDBOXES = `
+CREATE TABLE IF NOT EXISTS sandboxes (
+  id INTEGER PRIMARY KEY,
+  pod_name TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  handoff_id TEXT,
+  bot_id INTEGER,
+  image TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  ready_at TEXT,
+  ended_at TEXT,
+  duration_seconds INTEGER,
+  reclaim_reason TEXT,
+  last_error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sandboxes_user ON sandboxes(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sandboxes_open ON sandboxes(pod_name, status);
+`;
+
+/**
  * 有序迁移表：下标 0 → user_version 1，依次递增。**只追加，不修改已发布项。**
  *
  * 为什么需要迁移而不是继续裸跑 DDL：`CREATE TABLE IF NOT EXISTS` 只保证「表」存在，
@@ -75,7 +108,7 @@ CREATE INDEX IF NOT EXISTS idx_events_handoff ON handoff_events(handoff_id, id);
  * 基线 DDL 作为第 1 条：全部 IF NOT EXISTS，对既有库是无副作用的 no-op，
  * 因此 user_version=0 的旧库可以直接从头跑一遍迁移。
  */
-export const MIGRATIONS: readonly string[] = [BASELINE_DDL];
+export const MIGRATIONS: readonly string[] = [BASELINE_DDL, MIGRATION_SANDBOXES];
 
 /** 把库升到最新版本，返回升级后的 user_version */
 export function migrate(db: DB): number {

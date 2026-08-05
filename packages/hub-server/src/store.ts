@@ -85,3 +85,87 @@ export function statusEnteredAt(db: DB, handoffId: string, status: HandoffStatus
 
 export const getBot = (db: DB, id: number): BotRow | undefined =>
   db.prepare('SELECT * FROM bots WHERE id=?').get(id) as BotRow | undefined;
+
+// ---------- sandbox 实例历史（S5） ----------
+
+export type SandboxStatus = 'provisioning' | 'running' | 'reclaimed' | 'failed' | 'lost';
+
+/** 回收原因。用于面板上区分「正常收尾」与「异常丢失」，不要塞自由文本。 */
+export type ReclaimReason =
+  | 'task-done'
+  | 'task-failed'
+  | 'expired'
+  | 'cancelled'
+  | 'pod-failed'
+  | 'pod-lost'
+  | 'bot-deleted'
+  | 'orphan'
+  | 'crash-recover';
+
+export interface SandboxRow {
+  id: number;
+  pod_name: string;
+  user_id: number;
+  kind: 'web' | 'bot';
+  handoff_id: string | null;
+  bot_id: number | null;
+  image: string;
+  namespace: string;
+  status: SandboxStatus;
+  created_at: string;
+  ready_at: string | null;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  reclaim_reason: ReclaimReason | null;
+  last_error: string | null;
+}
+
+/** 未结束的行；pod 名会被 bot 重建复用，所以一切更新都只认「当前开着的那一行」 */
+const OPEN_STATUSES = "('provisioning','running')";
+
+export function recordSandboxCreate(
+  db: DB,
+  s: {
+    podName: string;
+    userId: number;
+    kind: 'web' | 'bot';
+    image: string;
+    namespace: string;
+    handoffId?: string | null;
+    botId?: number | null;
+  },
+): void {
+  db.prepare(
+    `INSERT INTO sandboxes (pod_name, user_id, kind, handoff_id, bot_id, image, namespace, status, created_at)
+     VALUES (@podName, @userId, @kind, @handoffId, @botId, @image, @namespace, 'provisioning', @at)`,
+  ).run({ ...s, handoffId: s.handoffId ?? null, botId: s.botId ?? null, at: nowIso() });
+}
+
+export function recordSandboxReady(db: DB, podName: string): void {
+  db.prepare(
+    `UPDATE sandboxes SET status='running', ready_at=? WHERE pod_name=? AND status='provisioning'`,
+  ).run(nowIso(), podName);
+}
+
+/**
+ * 关闭一行。执行时长按 ready_at → ended_at 计；从未 ready 的实例
+ * duration_seconds 保持 NULL——它没真正跑过任何东西，不该退化成 created_at 计时。
+ */
+export function recordSandboxReclaim(
+  db: DB,
+  podName: string,
+  status: Extract<SandboxStatus, 'reclaimed' | 'failed' | 'lost'>,
+  reason: ReclaimReason,
+  error?: string,
+): void {
+  db.prepare(
+    `UPDATE sandboxes
+        SET status=@status,
+            ended_at=@at,
+            duration_seconds = CASE WHEN ready_at IS NOT NULL
+              THEN CAST(ROUND((julianday(@at) - julianday(ready_at)) * 86400) AS INTEGER) END,
+            reclaim_reason=@reason,
+            last_error=COALESCE(@error, last_error)
+      WHERE pod_name=@podName AND status IN ${OPEN_STATUSES}`,
+  ).run({ podName, status, reason, error: error ?? null, at: nowIso() });
+}

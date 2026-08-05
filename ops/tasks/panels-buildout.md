@@ -104,7 +104,12 @@
 > (1) bot pod 由 `app.ts` 的 `POST /api/bots` 创建（不是 worker），一个 pod 顺序服务 N 个 handoff，没有 1:1 关系；
 > (2) 执行时长必须是 `ended_at - ready_at`，不是 handoff 的墙上时间。这个不对称就是建表的全部理由。
 
-- [ ] **S5 `sandboxes` 表 + store 存取**
+- [x] **S5 `sandboxes` 表 + store 存取** — 已完成（迁移第 2 条 + `recordSandboxCreate/Ready/Reclaim`；基线 147 → 154）
+  - **不变量**：所有更新只作用于「当前开着的那一行」（`status IN ('provisioning','running')`），
+    因为 bot pod 名会在重建时复用，否则会改写已回收的历史行。
+  - **不变量**：从未 ready 的实例 `duration_seconds` 保持 NULL，不退化成 `created_at` 计时——
+    它没真正执行过任何东西。
+  - `ReclaimReason` 是枚举而非自由文本，面板靠它区分「正常收尾」与「异常丢失」。
   - 文件：`packages/hub-server/src/db.ts`、`src/store.ts`
   ```sql
   CREATE TABLE IF NOT EXISTS sandboxes (
