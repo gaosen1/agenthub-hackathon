@@ -9,7 +9,7 @@ import { buildApp, type SandboxDeps } from './app.js';
 import { openDb } from './db.js';
 import { createOssSigner } from './oss.js';
 import { DirectConnector, PortForwardConnector, type SandboxConnector } from './connector.js';
-import { K8sOrchestrator, loadKube } from './k8s.js';
+import { K8sOrchestrator, loadKube, sandboxImage } from './k8s.js';
 import { Worker } from './worker.js';
 
 const PORT = Number(process.env.HUB_PORT ?? 4180);
@@ -32,9 +32,10 @@ let worker: Worker | undefined;
 if (process.env.HUB_NO_K8S !== '1') {
   try {
     const kc = loadKube();
+    const image = sandboxImage();
     const orchestrator = new K8sOrchestrator(kc, {
       namespace: NAMESPACE,
-      image: process.env.SANDBOX_IMAGE ?? 'crpi-0y776m3vqetn6kuh.cn-hangzhou.personal.cr.aliyuncs.com/qwen-code-demo/sandbox:dev',
+      image,
       acs: process.env.SANDBOX_ACS !== '0',
       ...(process.env.SANDBOX_PULL_SECRET ? { imagePullSecret: process.env.SANDBOX_PULL_SECRET } : {}),
     });
@@ -42,10 +43,11 @@ if (process.env.HUB_NO_K8S !== '1') {
       process.env.HUB_IN_CLUSTER === '1' ? new DirectConnector(orchestrator.coreApi()) : new PortForwardConnector(new PortForward(kc));
     worker = new Worker(db, orchestrator, connector, signer, {
       namespace: NAMESPACE,
+      image,
       idleTtlMinutes: Number(process.env.SANDBOX_IDLE_TTL_MINUTES ?? 120),
       taskLingerMinutes: Number(process.env.TASK_LINGER_MINUTES ?? 0),
     });
-    sandbox = { connector, orchestrator, namespace: NAMESPACE, worker };
+    sandbox = { connector, orchestrator, namespace: NAMESPACE, image, worker };
   } catch (e) {
     console.warn(`k8s unavailable, orchestration disabled: ${e instanceof Error ? e.message : String(e)}`);
   }

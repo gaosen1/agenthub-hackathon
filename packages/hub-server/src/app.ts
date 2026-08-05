@@ -25,7 +25,18 @@ import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
 import { ossKeyOf, type OssSigner } from './oss.js';
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
-import { getBot, nowIso, patchHandoff, recordEvent, setStatus, type BotRow, type HandoffRow } from './store.js';
+import {
+  getBot,
+  nowIso,
+  patchHandoff,
+  recordEvent,
+  recordSandboxCreate,
+  recordSandboxReady,
+  recordSandboxReclaim,
+  setStatus,
+  type BotRow,
+  type HandoffRow,
+} from './store.js';
 import { RunnerClient } from './runner-client.js';
 import type { SandboxConnector } from './connector.js';
 import type { PodOrchestrator } from './k8s.js';
@@ -35,6 +46,8 @@ export interface SandboxDeps {
   connector: SandboxConnector;
   orchestrator: PodOrchestrator;
   namespace: string;
+  /** sandbox 镜像，写入 sandbox 历史行的 image 列 */
+  image: string;
   worker?: Worker;
 }
 
@@ -385,6 +398,16 @@ export function buildApp(opts: AppOptions): FastifyInstance {
           DINGTALK_CLIENT_ID: body.clientId,
           DINGTALK_CLIENT_SECRET: decryptSecret(encryptSecret(body.clientSecret, secret), secret),
         });
+        // bot pod 常驻、永不经过 Worker.safeDeletePod，所以它的历史行由本路由自己维护。
+        // 先落行再建 Pod：建不出来的实例也要在面板上看得见，而不是凭空消失。
+        recordSandboxCreate(db, {
+          podName,
+          userId: uid,
+          kind: 'bot',
+          image: sandbox.image,
+          namespace: sandbox.namespace,
+          botId: id,
+        });
         await sandbox.orchestrator.createPod({
           podName,
           mode: 'bot',
@@ -393,7 +416,9 @@ export function buildApp(opts: AppOptions): FastifyInstance {
           labels: { 'agenthub/kind': 'bot', 'agenthub/owner': String(uid), 'agenthub/bot': String(id) },
         });
         db.prepare("UPDATE bots SET pod_name=?, runner_token=?, status='running' WHERE id=?").run(podName, runnerToken, id);
+        recordSandboxReady(db, podName);
       } catch (e) {
+        recordSandboxReclaim(db, podName, 'failed', 'pod-failed', e instanceof Error ? e.message : String(e));
         db.prepare("UPDATE bots SET status='error' WHERE id=?").run(id);
         throw fail(502, 'ERR_K8S', `bot sandbox create failed: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -405,6 +430,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const bot = ownBot(req);
     if (sandbox) {
       if (bot.pod_name) {
+        recordSandboxReclaim(db, bot.pod_name, 'reclaimed', 'bot-deleted');
         await sandbox.connector.dispose({ namespace: sandbox.namespace, podName: bot.pod_name }).catch(() => undefined);
         await sandbox.orchestrator.deletePod(bot.pod_name).catch(() => undefined);
       }

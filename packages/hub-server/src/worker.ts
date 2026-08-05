@@ -18,13 +18,19 @@ import {
   nowIso,
   patchHandoff,
   recordEvent,
+  recordSandboxCreate,
+  recordSandboxReady,
+  recordSandboxReclaim,
   setStatus,
   statusEnteredAt,
   type HandoffRow,
+  type ReclaimReason,
 } from './store.js';
 
 export interface WorkerConfig {
   namespace: string;
+  /** sandbox 镜像，写入 sandbox 历史行的 image 列 */
+  image: string;
   /** 交互 sandbox 空闲 TTL（分钟），默认 120 */
   idleTtlMinutes?: number;
   /** task 完成后长驻分钟数（spec §4.1：task 已完成的会话可长驻继续对话）；
@@ -88,6 +94,8 @@ export class Worker {
   // queued → provisioning：web 建新 Pod；bot 复用常驻 Pod
   private async handleQueued(): Promise<void> {
     for (const h of listByStatus(this.db, 'queued')) {
+      // 提到 try 外：catch 里要知道是哪个 pod，好把历史行关掉
+      let attemptedPod: string | undefined;
       try {
         if (h.kind === 'bot') {
           const bot = h.bot_id ? getBot(this.db, h.bot_id) : undefined;
@@ -95,6 +103,7 @@ export class Worker {
             setStatus(this.db, h, 'failed', 'bot sandbox not available');
             continue;
           }
+          // bot pod 的历史行在 POST /api/bots 建 Pod 时就已落库，这里只是复用，不新开一行
           patchHandoff(this.db, h.id, { pod_name: bot.pod_name, runner_token: bot.runner_token });
           setStatus(this.db, h, 'provisioning');
           continue;
@@ -102,6 +111,16 @@ export class Worker {
         const podName = `ah-web-${h.id.slice(3)}`;
         const serveToken = token();
         const runnerToken = token();
+        // 先落行再建 Pod：建不出来的实例也要在面板上看得见，而不是凭空消失
+        attemptedPod = podName;
+        recordSandboxCreate(this.db, {
+          podName,
+          userId: h.user_id,
+          kind: 'web',
+          image: this.cfg.image,
+          namespace: this.cfg.namespace,
+          handoffId: h.id,
+        });
         await this.orchestrator.createPod({
           podName,
           mode: 'web',
@@ -116,6 +135,7 @@ export class Worker {
         patchHandoff(this.db, h.id, { pod_name: podName, serve_token: serveToken, runner_token: runnerToken });
         setStatus(this.db, h, 'provisioning');
       } catch (e) {
+        if (attemptedPod) recordSandboxReclaim(this.db, attemptedPod, 'failed', 'pod-failed', msg(e));
         setStatus(this.db, h, 'failed', `provision failed: ${msg(e)}`);
       }
     }
@@ -129,7 +149,7 @@ export class Worker {
         if (phase === 'pending') continue;
         if (phase === 'failed' || phase === 'gone') {
           setStatus(this.db, h, 'failed', `pod ${phase}`);
-          await this.safeDeletePod(h);
+          await this.safeDeletePod(h, 'pod-failed');
           continue;
         }
         const runner = await this.runnerOf(h);
@@ -145,10 +165,13 @@ export class Worker {
         }
         patchHandoff(this.db, h.id, { last_active_at: nowIso() });
         setStatus(this.db, h, 'running');
+        // 执行时长从这里起算——agent 真正开始跑的时刻。
+        // 只更新仍处于 provisioning 的行，所以复用的 bot pod（行已是 running）这里是 no-op。
+        recordSandboxReady(this.db, h.pod_name!);
         recordEvent(this.db, h.id, 'log', JSON.stringify({ t: nowIso(), tag: 'sys', c: 'sandbox loaded, agent running' }));
       } catch (e) {
         setStatus(this.db, h, 'failed', `load failed: ${msg(e)}`);
-        await this.safeDeletePod(h);
+        await this.safeDeletePod(h, 'load-failed');
       }
     }
   }
@@ -209,7 +232,7 @@ export class Worker {
         const phase = await this.orchestrator.getPodPhase(h.pod_name!).catch(() => 'gone' as const);
         if (phase === 'gone' || phase === 'failed') {
           setStatus(this.db, h, 'failed', 'sandbox pod lost');
-          await this.safeDeletePod(h);
+          await this.safeDeletePod(h, 'pod-lost');
         }
       }
     }
@@ -236,7 +259,10 @@ export class Worker {
         setStatus(this.db, h, 'failed', `snapshot failed: ${msg(e)}`);
       } finally {
         this.logCursors.delete(h.id);
-        if (h.kind === 'web') await this.safeDeletePod(h);
+        // 回收原因由终态推导，面板要能区分正常收尾 / 失败 / 超时 / 取消
+        const reason: ReclaimReason =
+          target === 'failed' ? 'task-failed' : target === 'expired' ? 'expired' : target === 'cancelled' ? 'cancelled' : 'task-done';
+        if (h.kind === 'web') await this.safeDeletePod(h, reason);
         else if (h.bot_id) this.db.prepare('UPDATE bots SET current_handoff_id=NULL WHERE id=? AND current_handoff_id=?').run(h.bot_id, h.id);
       }
     }
@@ -261,7 +287,7 @@ export class Worker {
         const phase = await this.orchestrator.getPodPhase(h.pod_name).catch(() => 'gone' as const);
         if (phase === 'gone' || phase === 'failed') {
           setStatus(this.db, h, 'failed', 'recovered: pod lost');
-          await this.safeDeletePod(h);
+          await this.safeDeletePod(h, 'crash-recover');
         }
         // ready/pending 的留给正常 tick 继续推进
       }
@@ -284,13 +310,26 @@ export class Worker {
     }
     for (const pod of pods) {
       if (!active.has(pod)) {
+        recordSandboxReclaim(this.db, pod, 'reclaimed', 'orphan');
         await this.orchestrator.deletePod(pod).catch(() => undefined);
       }
     }
   }
 
-  private async safeDeletePod(h: HandoffRow): Promise<void> {
+  /** reason → 历史行终态。异常丢失与正常收尾在面板上要能区分开。 */
+  private static reclaimStatus(reason: ReclaimReason): 'reclaimed' | 'failed' | 'lost' {
+    if (reason === 'pod-failed' || reason === 'load-failed') return 'failed';
+    if (reason === 'pod-lost' || reason === 'crash-recover') return 'lost';
+    return 'reclaimed';
+  }
+
+  /**
+   * web pod 回收的唯一咽喉点——顺带关掉 sandbox 历史行。
+   * bot pod 常驻、不走这里，它的历史行由 DELETE /api/bots/:id 关闭。
+   */
+  private async safeDeletePod(h: HandoffRow, reason: ReclaimReason): Promise<void> {
     if (h.kind !== 'web' || !h.pod_name) return;
+    recordSandboxReclaim(this.db, h.pod_name, Worker.reclaimStatus(reason), reason);
     await this.connector.dispose(this.podRef(h.pod_name)).catch(() => undefined);
     await this.orchestrator.deletePod(h.pod_name).catch(() => undefined);
   }

@@ -97,6 +97,7 @@ export type ReclaimReason =
   | 'expired'
   | 'cancelled'
   | 'pod-failed'
+  | 'load-failed'
   | 'pod-lost'
   | 'bot-deleted'
   | 'orphan'

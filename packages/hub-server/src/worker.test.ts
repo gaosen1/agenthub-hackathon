@@ -117,7 +117,7 @@ beforeEach(async () => {
     getBaseUrl: async (_pod: PodRef, _port: number) => runner.url,
     dispose: async () => undefined,
   };
-  worker = new Worker(db, orch, connector, fakeSigner, { namespace: 'agenthub', idleTtlMinutes: 120 });
+  worker = new Worker(db, orch, connector, fakeSigner, { namespace: 'agenthub', image: 'test/sandbox:itest', idleTtlMinutes: 120 });
 });
 
 afterEach(() => {
@@ -208,5 +208,126 @@ describe('回收与恢复', () => {
     // orch 中没有这个 pod → gone
     await worker.recover();
     expect(getHandoff(db, 'hf-000006')!.status).toBe('failed');
+  });
+});
+
+describe('sandbox 实例历史（S6 写入点）', () => {
+  const sandboxRows = () =>
+    db.prepare('SELECT * FROM sandboxes ORDER BY id').all() as Array<{
+      pod_name: string;
+      kind: string;
+      handoff_id: string | null;
+      image: string;
+      namespace: string;
+      status: string;
+      ready_at: string | null;
+      ended_at: string | null;
+      duration_seconds: number | null;
+      reclaim_reason: string | null;
+      last_error: string | null;
+    }>;
+
+  it('web pod 走完 provisioning → running → reclaimed，并算出执行时长', async () => {
+    insertHandoff(db, { id: 'hf-000101', task: 'do it' });
+
+    await worker.tick(); // queued → provisioning → running（fake Pod 立即 ready）
+    let [s] = sandboxRows();
+    expect(s!.status).toBe('running');
+    expect(s!.pod_name).toBe('ah-web-000101');
+    expect(s!.kind).toBe('web');
+    expect(s!.handoff_id).toBe('hf-000101');
+    expect(s!.image).toBe('test/sandbox:itest');
+    expect(s!.namespace).toBe('agenthub');
+    expect(s!.ready_at).not.toBeNull();
+    expect(s!.ended_at).toBeNull();
+
+    // 把 ready_at 挪早，验证时长按 ready_at → ended_at 计
+    db.prepare("UPDATE sandboxes SET ready_at = datetime('now','-90 seconds')").run();
+    runner.state.taskDone = true;
+    await worker.tick(); // → packaging → done → 回收
+
+    [s] = sandboxRows();
+    expect(s!.status).toBe('reclaimed');
+    expect(s!.reclaim_reason).toBe('task-done');
+    expect(s!.ended_at).not.toBeNull();
+    expect(s!.duration_seconds).toBeGreaterThanOrEqual(89);
+    expect(s!.duration_seconds).toBeLessThanOrEqual(91);
+  });
+
+  it('硬超时收尾记为 expired，与正常完成区分开', async () => {
+    insertHandoff(db, { id: 'hf-000102', task: 'long', timeout: 1 });
+    await worker.tick();
+    db.prepare("UPDATE handoff_events SET at=? WHERE handoff_id=? AND payload='running'").run(
+      new Date(Date.now() - 120_000).toISOString(),
+      'hf-000102',
+    );
+
+    await worker.tick();
+
+    const [s] = sandboxRows();
+    expect(s!.status).toBe('reclaimed');
+    expect(s!.reclaim_reason).toBe('expired');
+  });
+
+  it('Pod 起不来记为 failed/pod-failed，且从未 ready 故无执行时长', async () => {
+    insertHandoff(db, { id: 'hf-000103' });
+    // 让 Pod 建出来就是 failed 相位
+    const origCreate = orch.createPod.bind(orch);
+    orch.createPod = async (spec) => {
+      await origCreate(spec);
+      orch.pods.set(spec.podName, 'failed');
+    };
+
+    await worker.tick(); // queued → provisioning
+    await worker.tick(); // provisioning 看到 failed 相位 → 回收
+
+    const [s] = sandboxRows();
+    expect(s!.status).toBe('failed');
+    expect(s!.reclaim_reason).toBe('pod-failed');
+    expect(s!.ready_at).toBeNull();
+    expect(s!.duration_seconds).toBeNull();
+  });
+
+  it('孤儿清理会关掉行，不留永久 running', async () => {
+    insertHandoff(db, { id: 'hf-000104' });
+    await worker.tick();
+    expect(sandboxRows()[0]!.status).toBe('running');
+
+    // 抹掉 handoff 的活跃引用，让 pod 变成孤儿
+    db.prepare("UPDATE handoffs SET status='done' WHERE id=?").run('hf-000104');
+    await worker.cleanupOrphans();
+
+    const [s] = sandboxRows();
+    expect(s!.status).toBe('reclaimed');
+    expect(s!.reclaim_reason).toBe('orphan');
+  });
+
+  it('崩溃恢复把丢失的实例记为 lost，而不是留在 running', async () => {
+    insertHandoff(db, { id: 'hf-000105' });
+    await worker.tick();
+    expect(sandboxRows()[0]!.status).toBe('running');
+
+    // 模拟 hub 重启期间 Pod 消失
+    orch.pods.clear();
+    db.prepare("UPDATE handoffs SET status='running' WHERE id=?").run('hf-000105');
+    await worker.recover();
+
+    const [s] = sandboxRows();
+    expect(s!.status).toBe('lost');
+    expect(s!.reclaim_reason).toBe('crash-recover');
+  });
+
+  it('bot handoff 复用常驻 pod，不新开历史行', async () => {
+    db.prepare(
+      "INSERT INTO bots (user_id, name, client_id, client_secret_enc, pod_name, runner_token, status, created_at) VALUES (1,'ops','c','e','ah-bot-1-ops','rt','running','t')",
+    ).run();
+    insertHandoff(db, { id: 'hf-000106' });
+    db.prepare("UPDATE handoffs SET kind='bot', bot_id=1 WHERE id=?").run('hf-000106');
+    orch.pods.set('ah-bot-1-ops', 'ready');
+
+    await worker.tick();
+
+    // bot pod 的行由 POST /api/bots 负责，worker 这条路径不该凭空造行
+    expect(sandboxRows()).toHaveLength(0);
   });
 });

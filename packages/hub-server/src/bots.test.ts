@@ -63,6 +63,7 @@ describe('bots API', () => {
         orchestrator: orch,
         connector: { getBaseUrl: async () => 'http://127.0.0.1:1', dispose: async () => undefined },
         namespace: 'agenthub',
+        image: 'test/sandbox:itest',
       },
     });
     const res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { username: 'alice', password: 'secret123' } });
@@ -105,6 +106,59 @@ describe('bots API', () => {
     expect(orch.secrets.size).toBe(0);
     const list = await app.inject({ method: 'GET', url: '/api/bots', headers: { authorization: `Bearer ${token}` } });
     expect((list.json() as { items: unknown[] }).items).toHaveLength(0);
+  });
+
+  it('创建 bot 会开一行 sandbox 历史（bot pod 不经过 Worker，由本路由维护）', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/api/bots',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'mybot', clientId: 'c', clientSecret: 's' },
+    });
+
+    const rows = db.prepare('SELECT * FROM sandboxes').all() as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!['kind']).toBe('bot');
+    expect(rows[0]!['bot_id']).toBe(1);
+    expect(rows[0]!['pod_name']).toBe('ah-bot-1-mybot');
+    expect(rows[0]!['image']).toBe('test/sandbox:itest');
+    expect(rows[0]!['status']).toBe('running');
+    expect(rows[0]!['handoff_id']).toBeNull();
+  });
+
+  it('删除 bot 关闭历史行，原因 bot-deleted', async () => {
+    await app.inject({
+      method: 'POST',
+      url: '/api/bots',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'mybot', clientId: 'c', clientSecret: 's' },
+    });
+
+    await app.inject({ method: 'DELETE', url: '/api/bots/1', headers: { authorization: `Bearer ${token}` } });
+
+    const row = db.prepare('SELECT * FROM sandboxes').get() as Record<string, unknown>;
+    expect(row['status']).toBe('reclaimed');
+    expect(row['reclaim_reason']).toBe('bot-deleted');
+    expect(row['ended_at']).not.toBeNull();
+  });
+
+  it('建 Pod 失败时历史行记为 failed/pod-failed，不留悬挂的 provisioning', async () => {
+    orch.createPod = async () => {
+      throw new Error('quota exceeded');
+    };
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/bots',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { name: 'mybot', clientId: 'c', clientSecret: 's' },
+    });
+    expect(res.statusCode).toBe(502);
+
+    const row = db.prepare('SELECT * FROM sandboxes').get() as Record<string, unknown>;
+    expect(row['status']).toBe('failed');
+    expect(row['reclaim_reason']).toBe('pod-failed');
+    expect(row['last_error']).toContain('quota exceeded');
   });
 
   it('kind=bot 的 handoff 必须携带本人有效 botId', async () => {

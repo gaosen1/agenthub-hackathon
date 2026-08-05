@@ -181,8 +181,8 @@ describe('hub-server × 真实 runner 全链路（本地版 CP-2）', () => {
       getBaseUrl: async () => `http://127.0.0.1:${RUNNER_PORT}`,
       dispose: async () => undefined,
     };
-    const worker = new Worker(db, orch, connector, signer, { namespace: 'agenthub' });
-    const app = buildApp({ db, signer, secret: 'itest', sandbox: { connector, orchestrator: orch, namespace: 'agenthub', worker } });
+    const worker = new Worker(db, orch, connector, signer, { namespace: 'agenthub', image: 'test/sandbox:itest' });
+    const app = buildApp({ db, signer, secret: 'itest', sandbox: { connector, orchestrator: orch, namespace: 'agenthub', image: 'test/sandbox:itest', worker } });
 
     // 创建 handoff 并上传回执
     const reg = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { username: 'alice', password: 'secret123' } });

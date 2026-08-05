@@ -36,6 +36,15 @@ export interface K8sConfig {
 
 export const SANDBOX_LABEL = 'app=agenthub-sandbox';
 
+/**
+ * sandbox 镜像的唯一来源。镜像名现在有三个消费方——K8sConfig（建 Pod）、
+ * WorkerConfig 与 bots 路由（写 sandbox 历史行的 image 列），所以不能再各处内联字面量。
+ */
+export const DEFAULT_SANDBOX_IMAGE =
+  'crpi-0y776m3vqetn6kuh.cn-hangzhou.personal.cr.aliyuncs.com/qwen-code-demo/sandbox:dev';
+
+export const sandboxImage = (): string => process.env.SANDBOX_IMAGE ?? DEFAULT_SANDBOX_IMAGE;
+
 export function loadKube(): k8s.KubeConfig {
   const kc = new k8s.KubeConfig();
   if (process.env.HUB_IN_CLUSTER === '1') kc.loadFromCluster();

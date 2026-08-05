@@ -129,7 +129,15 @@
   - 新增 `recordSandboxCreate/Ready/Reclaim`（纯 SQL、可单测）
   - 验收：DDL + 三个 helper 各有单测
 
-- [ ] **S6 生命周期写入点**
+- [x] **S6 生命周期写入点** — 已完成（基线 154 → 163）
+  - **决定：先落历史行再建 Pod**（worker `handleQueued` 与 `POST /api/bots` 一致）。
+    建不出来的实例也要在面板上看得见，而不是凭空消失——用户排查「bot 起不来」正需要这条。
+  - `safeDeletePod(h, reason)` 现在是 web pod 回收的**唯一**咽喉点，reason 必传；
+    `Worker.reclaimStatus()` 做 reason → 终态映射（`pod-failed`/`load-failed`→failed，
+    `pod-lost`/`crash-recover`→lost，其余→reclaimed）。新增 `load-failed` 区分「Pod 起来了但 /load 失败」。
+  - 镜像名有了唯一来源：`k8s.ts` 的 `DEFAULT_SANDBOX_IMAGE` + `sandboxImage()`；
+    `WorkerConfig.image` 与 `SandboxDeps.image` 都从这里来，不再各处内联字面量。
+  - 三个测试 Fake（`worker.test.ts`/`bots.test.ts`/`stack.e2e.test.ts`）需补 `image` 字段。
   - 文件：`src/worker.ts`、`src/app.ts`（bots 段落）
   - `worker.ts` `handleQueued`：`createPod` 成功后、`patchHandoff` 之前 → 插入 `provisioning`；catch → `failed`
   - `worker.ts` `handleProvisioning`：`setStatus(running)` 之后 → 写 `ready_at`；
