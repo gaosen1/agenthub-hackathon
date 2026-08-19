@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agenthub-hub
+  namespace: agenthub
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: agenthub-hub }
+  template:
+    metadata:
+      labels: { app: agenthub-hub }
+    spec:
+      serviceAccountName: agenthub-hub
+      containers:
+        - name: hub
+          image: REPLACE_ACR/agenthub/hub:latest
+          ports: [{ containerPort: 4180 }]
+          env:
+            - { name: HUB_IN_CLUSTER, value: '1' }
+            - { name: HUB_HOST, value: 0.0.0.0 }
+            - { name: SANDBOX_NAMESPACE, value: agenthub }
+            - { name: SANDBOX_IMAGE, value: REPLACE_ACR/agenthub-demo/sandbox:dev }
+            - { name: HUB_DB_PATH, value: /data/hub.sqlite }
+          envFrom:
+            - secretRef: { name: agenthub-hub-env } # HUB_SECRET_KEY / OSS_AK / OSS_SK / OSS_BUCKET / OSS_REGION
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          resources:
+            requests: { cpu: 500m, memory: 512Mi }
+            limits: { cpu: '1', memory: 1Gi }
+      volumes:
+        - name: data
+          emptyDir: {} # 演示规模；如需持久化换 PVC
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agenthub-hub
+  namespace: agenthub
+spec:
+  type: LoadBalancer # 演示期直接暴露；也可换 ClusterIP + port-forward
+  selector: { app: agenthub-hub }
+  ports:
+    - { port: 80, targetPort: 4180 }

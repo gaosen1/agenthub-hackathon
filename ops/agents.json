@@ -1,0 +1,44 @@
+{
+  "_doc": {
+    "说明": "Agent 进程巡检注册表。推荐用 launch_agent.sh 启动并自动登记，每 10 分钟的定时任务会按此表检查并恢复。",
+    "字段": {
+      "name": "Agent 名称，仅用于报告展示",
+      "enabled": "是否参与巡检，false 时跳过",
+      "match": "pgrep -f 的匹配模式，qodercli 场景为 'qodercli --session-id <sid>'",
+      "workdir": "重启时的工作目录（绝对路径）",
+      "restart_cmd": "进程不存在时的拉起命令，qodercli 场景为 'qodercli -r <sid> -p 续跑指令'",
+      "log": "重启后进程 stdout/stderr 追加写入的日志文件（绝对路径）",
+      "task_list": "该 Agent 的任务列表文件路径，仅用于报告提示"
+    }
+  },
+  "agents": [
+    {
+      "name": "example-agent（示例，请用 launch_agent.sh 启动后自动生成真实条目）",
+      "enabled": false,
+      "match": "qodercli --session-id <session-id>",
+      "workdir": "/home/dev/team-055",
+      "restart_cmd": "qodercli -r <session-id> -p '上次会话意外中断。请读取任务列表 ops/tasks/example.md，跳过已完成项，继续执行剩余任务。' --dangerously-skip-permissions",
+      "log": "/home/dev/team-055/ops/logs/example-agent.log",
+      "task_list": "ops/tasks/example.md"
+    },
+    {
+      "name": "heartbeat-test",
+      "enabled": true,
+      "match": "qodercli .*255da52b-f684-4884-85c7-962222e3b39f",
+      "workdir": "/home/dev/team-055",
+      "restart_cmd": "/home/dev/.local/bin/qodercli -r 255da52b-f684-4884-85c7-962222e3b39f -p '上次会话意外中断。请读取任务列表 ops/tasks/heartbeat-test.md，跳过已完成项，继续执行剩余任务；若所有任务均已完成，请执行 touch /home/dev/team-055/ops/state/heartbeat-test.done 后结束。' --dangerously-skip-permissions",
+      "log": "/home/dev/team-055/ops/logs/heartbeat-test.log",
+      "task_list": "ops/tasks/heartbeat-test.md"
+    },
+    {
+      "name": "agenthub-dev",
+      "enabled": true,
+      "session_log": "/home/dev/.qoder/logs/sessions/-Users-devuser--qoder-worktree-team-055-ESFm4T/7a14813d-ac3d-4234-823a-ff7f1c31cc84/segments/2026-08-04T17-17-23-541+08-00-dr6kcc-p6654.jsonl",
+      "match": "",
+      "workdir": "/home/dev/.qoder/worktree/team-055/ESFm4T",
+      "restart_cmd": "/home/dev/.local/bin/qodercli -r 7a14813d-ac3d-4234-823a-ff7f1c31cc84 -p '上次会话意外中断。请回顾会话上下文，继续执行之前未完成的工作。' --dangerously-skip-permissions",
+      "log": "/home/dev/team-055/ops/logs/agenthub-dev.log",
+      "task_list": ""
+    }
+  ]
+}
