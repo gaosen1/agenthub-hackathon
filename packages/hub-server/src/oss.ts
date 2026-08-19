@@ -4,8 +4,12 @@
  * `OssSigner` 有意保持窄接口——worker 与 handoff 路由只需要签名，
  * 且有 4 个测试 Fake 实现它。OSS 面板需要的列举/统计能力放在 `OssClient` 里。
  */
+import { exec as execCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import OSS from 'ali-oss';
 import { fail } from './state.js';
+
+const exec = promisify(execCb);
 
 export interface OssSigner {
   /** PUT 上传签名 URL */
@@ -78,9 +82,14 @@ class NullOssClient implements OssClient {
   }
 }
 
+/** STS 续期命令输出解析（aliyun CLI AssumeRole 的 JSON 结构） */
+interface StsRefreshOutput {
+  Credentials?: { AccessKeyId?: string; AccessKeySecret?: string; SecurityToken?: string };
+}
+
 class AliOssClient implements OssClient {
   readonly configured = true;
-  private readonly client: OSS;
+  private client: OSS;
 
   constructor(
     private readonly bucket: string,
@@ -88,10 +97,34 @@ class AliOssClient implements OssClient {
     ak: string,
     sk: string,
     stsToken?: string,
+    stsRefreshCmd?: string,
   ) {
-    this.client = new OSS({
-      region,
-      bucket,
+    this.client = this.buildClient(ak, sk, stsToken);
+    // STS 凭证最长 1 小时；配置了续期命令时定时重建客户端。
+    // 不用 ali-oss 自带的 refreshSTSToken：它只在异步请求时触发，
+    // 而我们主要用同步的 signatureUrl，不会触发刷新。
+    if (stsRefreshCmd) {
+      const timer = setInterval(() => {
+        void (async () => {
+          try {
+            const { stdout } = await exec(stsRefreshCmd, { timeout: 30_000 });
+            const c = (JSON.parse(stdout) as StsRefreshOutput).Credentials;
+            if (!c?.AccessKeyId || !c.AccessKeySecret || !c.SecurityToken) return;
+            this.client = this.buildClient(c.AccessKeyId, c.AccessKeySecret, c.SecurityToken);
+            console.log('[oss] sts credentials refreshed');
+          } catch (e) {
+            console.error(`[oss] sts refresh failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        })();
+      }, 50 * 60_000); // 提前于 1 小时过期刷新
+      timer.unref();
+    }
+  }
+
+  private buildClient(ak: string, sk: string, stsToken?: string): OSS {
+    return new OSS({
+      region: this.region,
+      bucket: this.bucket,
       accessKeyId: ak,
       accessKeySecret: sk,
       ...(stsToken ? { stsToken } : {}),
@@ -180,5 +213,12 @@ export function createOssClient(): OssClient {
   const ak = process.env.OSS_AK;
   const sk = process.env.OSS_SK;
   if (process.env.HUB_NO_OSS === '1' || !bucket || !ak || !sk) return new NullOssClient();
-  return new AliOssClient(bucket, process.env.OSS_REGION ?? 'oss-cn-hangzhou', ak, sk, process.env.OSS_STS_TOKEN);
+  return new AliOssClient(
+    bucket,
+    process.env.OSS_REGION ?? 'oss-cn-hangzhou',
+    ak,
+    sk,
+    process.env.OSS_STS_TOKEN,
+    process.env.OSS_STS_REFRESH_CMD,
+  );
 }

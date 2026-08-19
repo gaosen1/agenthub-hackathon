@@ -89,6 +89,11 @@ export async function writeChannelsConfig(home: string, botName: string, workspa
     useConnectionManager: true,
   };
   settings['channels'] = channels;
+  // 移除 hooks：本地开发环境的 hook 脚本路径在容器内不存在，
+  // 会导致每次回复附带 Warning（bash: ... No such file or directory）
+  delete settings['hooks'];
+  // 云端沙箱内无人值守，工具审批改为 yolo，避免群里每个操作都要 /approve
+  settings['tools'] = { ...(settings['tools'] as Record<string, unknown> | undefined), approvalMode: 'yolo' };
   // qwen serve 需要完整的模型 provider 配置才能用正确的端点和 key
   if (!settings['model']) {
     settings['model'] = {

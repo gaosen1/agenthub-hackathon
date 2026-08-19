@@ -3,10 +3,10 @@
  * 下载还原 / 打包上传 / 拉起 qwen serve / 路由绑定。X-Runner-Token 认证。
  */
 import Fastify, { type FastifyInstance } from 'fastify';
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { execFile as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
@@ -27,6 +27,76 @@ import type { HandoffManifest } from '@agenthub/shared';
 /** qwen serve daemon 使用 SHA256(workspacePath) 前 16 位作为目录名 */
 function daemonWsHash(workspacePath: string): string {
   return createHash('sha256').update(resolve(workspacePath)).digest('hex').slice(0, 16);
+}
+
+/**
+ * fork session：复制 pushed session 并把每条记录的 sessionId 重写为新 id。
+ * daemon load 时校验 transcript 只能有单一 session id；若直接 copy，
+ * 旧记录带原 id、daemon 追加的新记录带 fork id，重启后 reload 必然 500。
+ */
+async function forkSessionFile(src: string, dest: string, forkedId: string): Promise<void> {
+  const raw = await fs.readFile(src, 'utf8');
+  const out = raw
+    .split('\n')
+    .map((line) => {
+      if (!line.trim()) return line;
+      try {
+        const rec = JSON.parse(line) as Record<string, unknown>;
+        if (rec['sessionId']) rec['sessionId'] = forkedId;
+        return JSON.stringify(rec);
+      } catch {
+        return line;
+      }
+    })
+    .join('\n');
+  await fs.writeFile(dest, out);
+}
+
+/**
+ * 自动绑定监听器：bot 模式下 /load 完成后启动，
+ * 轮询 daemon 的 observed-contacts.json，发现新 chatId 时自动 fork session 并写路由。
+ * 每个群从同一份 pushed session 开始，但各自独立演进（perChat 隔离）。
+ */
+let autoBinderTimer: ReturnType<typeof setInterval> | undefined;
+function startAutoBinder(pushedSessionId: string, workspacePath: string, botName: string): void {
+  const dHash = daemonWsHash(workspacePath);
+  const home = qwenHome();
+  const boundChatIds = new Set<string>();
+
+  autoBinderTimer = setInterval(async () => {
+    if (!manifest || state.mode !== 'bot') {
+      if (autoBinderTimer) clearInterval(autoBinderTimer);
+      return;
+    }
+    try {
+      const chats = await listChats(home, dHash);
+      for (const chat of chats) {
+        const chatId = chat.chatId;
+        if (boundChatIds.has(chatId)) continue;
+        // 跳过 push 时已绑定的 chatId（如果有的话）
+        boundChatIds.add(chatId);
+
+        // fork session：复制 pushed session 到新文件
+        const srcSession = join(home, 'projects', manifest.wsHash, 'chats', `${pushedSessionId}.jsonl`);
+        if (!existsSync(srcSession)) continue;
+
+        const forkedId = randomUUID();
+        const forkPath = join(home, 'projects', manifest.wsHash, 'chats', `${forkedId}.jsonl`);
+        await forkSessionFile(srcSession, forkPath, forkedId);
+
+        // 写路由后必须重启 serve，daemon 才能在启动时 lazy-reload routes.json
+        await stopServe();
+        await rewriteRoute(home, dHash, botName, chatId, forkedId, workspacePath);
+        await startServe({ mode: 'bot', workspacePath, botName });
+        await waitServeReady('bot');
+        appendLog('ok', `auto-bind: chat ${chatId} -> forked session ${forkedId} (serve restarted)`);
+      }
+    } catch {
+      // 轮询失败，下次重试
+    }
+  }, 3000);
+  autoBinderTimer.unref();
+  appendLog('sys', `auto-binder started (pushed session ${pushedSessionId}, wsHash=${dHash})`);
 }
 
 const exec = promisify(execCb);
@@ -84,11 +154,6 @@ export function buildRunner(): FastifyInstance {
           const botName = process.env.BOT_NAME ?? 'bot';
           const { writeChannelsConfig } = await import('./context.js');
           await writeChannelsConfig(qwenHome(), botName, manifest.workspacePath);
-          if (body.bindChatId) {
-            const dHash = daemonWsHash(manifest.workspacePath);
-            appendLog('sys', `binding chat ${body.bindChatId} -> session ${manifest.sessionId} (wsHash=${dHash})`);
-            await rewriteRoute(qwenHome(), dHash, botName, body.bindChatId, manifest.sessionId, manifest.workspacePath);
-          }
           // task 与载体正交（spec §1）：bot 带 task 也先 headless 续跑，完成后再起 serve 供群内对话
           if (body.task) {
             const code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
@@ -96,10 +161,24 @@ export function buildRunner(): FastifyInstance {
             if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
             appendLog(code === 0 ? 'ok' : 'err', `task relay finished (exit ${code})`);
           }
+          // 在 serve 启动前重绑所有现有群路由，daemon 启动时 lazy-reload routes.json 即生效
+          const dHash = daemonWsHash(manifest.workspacePath);
+          const existingChats = await listChats(qwenHome(), dHash);
+          for (const chat of existingChats) {
+            await rewriteRoute(qwenHome(), dHash, botName, chat.chatId, manifest.sessionId, manifest.workspacePath);
+            appendLog('ok', `auto-rebind chat ${chat.chatId} -> session ${manifest.sessionId.slice(0, 8)}`);
+          }
+          // 如果 push 时显式指定了 --chat 且不在现有列表中，也绑定
+          if (body.bindChatId && !existingChats.some(c => c.chatId === body.bindChatId)) {
+            await rewriteRoute(qwenHome(), dHash, botName, body.bindChatId, manifest.sessionId, manifest.workspacePath);
+            appendLog('ok', `explicit bind chat ${body.bindChatId} -> session ${manifest.sessionId.slice(0, 8)}`);
+          }
           await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName });
           await waitServeReady('bot');
           state.serveReady = true;
           appendLog('ok', 'bot serve ready (dingtalk stream connected on qwen side)');
+          // 启动自动绑定监听器：新群 @机器人 时自动 fork session 并写路由
+          startAutoBinder(manifest.sessionId, manifest.workspacePath, botName);
           return;
         }
 
@@ -161,24 +240,29 @@ export function buildRunner(): FastifyInstance {
     if (!ws || !cwd) {
       return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'no workspace loaded' } });
     }
-    // 在 stopServe 之前先通过 daemon API 创建 session（daemon 仍在运行）
-    // daemon 不接受自定义 sessionId，总是返回随机 UUID
+    // 如果请求体带了 sessionId 且对应的 session 文件已存在（/load 还原过），
+    // 直接复用，不要让 daemon 新建空 session 覆盖掉对话历史。
+    // 只有 session 文件不存在时才通过 daemon API 创建新 session。
     let sessionId = body.sessionId;
-    try {
-      const resp = await fetch('http://127.0.0.1:4170/session', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        signal: AbortSignal.timeout(3000),
-      });
-      if (resp.ok) {
-        const created = await resp.json() as { sessionId?: string };
-        if (created.sessionId) sessionId = created.sessionId;
+    const sessionFile = join(qwenHome(), 'projects', ws, 'chats', `${body.sessionId}.jsonl`);
+    if (!existsSync(sessionFile)) {
+      try {
+        const resp = await fetch('http://127.0.0.1:4170/session', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (resp.ok) {
+          const created = await resp.json() as { sessionId?: string };
+          if (created.sessionId) sessionId = created.sessionId;
+        }
+      } catch {
+        // daemon 不可用或端口不对，用原始 sessionId
       }
-    } catch {
-      // daemon 不可用或端口不对，用原始 sessionId
     }
     await stopServe();
-    await rewriteRoute(qwenHome(), ws, botName, body.chatId, sessionId, cwd);
+    // 路由必须写到 daemon 自己的 hash 目录（SHA256[:16]），写 manifest.wsHash 目录 daemon 不读
+    await rewriteRoute(qwenHome(), daemonWsHash(cwd), botName, body.chatId, sessionId, cwd);
     await startServe({ mode: 'bot', workspacePath: cwd, botName });
     await waitServeReady('bot');
     appendLog('ok', `rebound chat ${body.chatId} -> session ${sessionId}`);

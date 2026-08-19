@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import {
@@ -82,9 +82,24 @@ export async function runPull(handoffId: string | undefined, opts: PullOptions):
               `session ${sid}: +${r.mergedCount} 条云端记录${r.forked ? '（分叉交错合并）' : ''}，备份 ${basename(r.backupPath!)}`,
             );
         } else if (!existsSync(localPath)) {
-          // 云端新 session（bot 各群）直接落盘
+          // 云端新 session（bot 各群）直接落盘；落盘前归一化 sessionId——
+          // 旧版 fork 是整文件复制，记录里混杂原 session id，qwen resume 会拒载
+          // （Transcript records contain multiple session ids）
           mkdirSync(chatsDir(workspacePath), { recursive: true });
-          copyFileSync(cloudPath, localPath);
+          const normalized = readFileSync(cloudPath, 'utf8')
+            .split('\n')
+            .map((line) => {
+              if (!line.trim()) return line;
+              try {
+                const rec = JSON.parse(line) as Record<string, unknown>;
+                if (rec['sessionId']) rec['sessionId'] = sid;
+                return JSON.stringify(rec);
+              } catch {
+                return line;
+              }
+            })
+            .join('\n');
+          writeFileSync(localPath, normalized);
           sessionSummaries.push(`session ${sid}: 云端新会话，已落盘`);
         }
       }
