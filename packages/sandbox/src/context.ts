@@ -97,6 +97,8 @@ export async function writeCloudModelConfig(home: string): Promise<void> {
     // 无现成配置：从空对象开始
   }
   applyCloudModelSettings(settings);
+  // 本地 hooks 引用宿主机绝对路径，容器内不存在会 Warn 混入模型输出（与 writeChannelsConfig 同因）
+  delete settings['hooks'];
   await fs.mkdir(home, { recursive: true });
   await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
 }

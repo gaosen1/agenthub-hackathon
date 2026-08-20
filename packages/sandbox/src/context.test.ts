@@ -71,6 +71,7 @@ describe('writeCloudModelConfig（web 模式模型覆盖）', () => {
         theme: 'dark',
         model: { name: 'local', baseUrl: 'https://idealab.alibaba-inc.com/api/openai/v1' },
         modelProviders: { openai: [{ id: 'local', envKey: 'LOCAL_KEY' }] },
+        hooks: { Stop: [{ hooks: [{ type: 'command', command: '/Users/x/hook.sh' }] }] },
       }),
     );
     await writeCloudModelConfig(home);
@@ -79,6 +80,7 @@ describe('writeCloudModelConfig（web 模式模型覆盖）', () => {
     expect(s.model).toEqual({ name: '$OPENAI_MODEL', baseUrl: '$OPENAI_BASE_URL' });
     expect(s.modelProviders.openai[0].envKey).toBe('OPENAI_API_KEY');
     expect(s.security).toEqual({ auth: { selectedType: 'openai' } });
+    expect(s.hooks).toBeUndefined(); // 本地 hooks 不落入云端配置
   });
 });
 

@@ -47,7 +47,10 @@ export function sanitizedSettings(): string | undefined {
       }
       return obj;
     };
-    return JSON.stringify(strip(settings), null, 2);
+    const cleaned = strip(settings) as Record<string, unknown>;
+    // hooks 引用本地绝对路径脚本，云端还原后必然 Warn 并混入模型输出（hf-351dcf 实测），不随包携带
+    delete cleaned['hooks'];
+    return JSON.stringify(cleaned, null, 2);
   } catch {
     return undefined;
   }
