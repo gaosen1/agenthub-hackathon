@@ -304,6 +304,23 @@ body{
   *,*::before,*::after{animation:none!important;transition:none!important}
 }
 
+/* 响应式：窄视口堆叠，杜绝水平滚动（MASTER 验收清单） */
+@media (max-width: 1100px){
+  .main{grid-template-columns:280px 1fr}
+  .chat{display:none}
+}
+@media (max-width: 760px){
+  .main{grid-template-columns:1fr}
+  .sidebar{max-height:42vh;border-right:none;border-bottom:1px solid var(--line)}
+  .grid4{grid-template-columns:repeat(2,1fr)}
+  .view-inner{padding:18px 16px 48px}
+  .detail-inner{padding:16px 14px 48px}
+  .form-row{flex-direction:column;align-items:flex-start;gap:8px}
+  .form-row .fl{width:auto}
+  .topbar{gap:8px;padding:0 12px}
+  .topbar .nav{margin-left:0}
+}
+
 /* ---------- 顶栏导航 ---------- */
 .topbar .nav{display:flex;gap:4px;margin-left:24px}
 .topbar .nav a{color:var(--tx2);text-decoration:none;padding:6px 12px;border-radius:8px;font-size:13px;display:flex;align-items:center;gap:7px}
@@ -343,7 +360,7 @@ select.fi{width:auto;cursor:pointer}
 /* 受控开关（role=switch），非原型的 classList.toggle */
 .switch{position:relative;width:36px;height:20px;background:var(--bg4);border-radius:20px;cursor:pointer;border:1px solid var(--line2);transition:.2s;flex-shrink:0;padding:0}
 .switch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--tx3);transition:.2s}
-.switch[aria-checked="true"]{background:rgba(109,124,255,.4);border-color:var(--brand)}
+.switch[aria-checked="true"]{background:rgba(88,166,255,.35);border-color:var(--brand)}
 .switch[aria-checked="true"]::after{left:18px;background:#fff}
 .switch:disabled{opacity:.45;cursor:not-allowed}
 

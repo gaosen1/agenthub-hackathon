@@ -3,10 +3,17 @@
  * 不做 mock 回退——宁可显示未配置/加载失败，不拿假数据冒充真实对象。
  */
 import { OssListRespSchema, type OssListResp } from '@agenthub/shared/contracts';
-import { hubFetch } from './client.js';
+import { AuthRequiredError, hubFetch, setDataSource } from './client.js';
 
 export async function fetchOss(refresh = false): Promise<OssListResp> {
-  return hubFetch(`/api/oss${refresh ? '?refresh=1' : ''}`, (d) => OssListRespSchema.parse(d));
+  try {
+    const data = await hubFetch(`/api/oss${refresh ? '?refresh=1' : ''}`, (d) => OssListRespSchema.parse(d));
+    setDataSource('hub');
+    return data;
+  } catch (e) {
+    if (e instanceof AuthRequiredError) setDataSource('unauth');
+    throw e;
+  }
 }
 
 /** 签名下载链接（服务端先做归属校验） */

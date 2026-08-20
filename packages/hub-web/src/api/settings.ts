@@ -2,10 +2,17 @@
  * 设置面板数据（S19）。GET/PATCH /api/settings、token 轮换、webhook 连通性测试。
  */
 import { SettingsRespSchema, type SettingsResp } from '@agenthub/shared/contracts';
-import { hubFetch } from './client.js';
+import { AuthRequiredError, hubFetch, setDataSource } from './client.js';
 
 export async function fetchSettings(): Promise<SettingsResp> {
-  return hubFetch('/api/settings', (d) => SettingsRespSchema.parse(d));
+  try {
+    const data = await hubFetch('/api/settings', (d) => SettingsRespSchema.parse(d));
+    setDataSource('hub');
+    return data;
+  } catch (e) {
+    if (e instanceof AuthRequiredError) setDataSource('unauth');
+    throw e;
+  }
 }
 
 export async function patchSettings(body: {
