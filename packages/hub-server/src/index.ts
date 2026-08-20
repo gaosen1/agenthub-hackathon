@@ -9,7 +9,7 @@ import { buildApp, type SandboxDeps } from './app.js';
 import { openDb } from './db.js';
 import { createOssClient } from './oss.js';
 import { DirectConnector, PortForwardConnector, type SandboxConnector } from './connector.js';
-import { K8sOrchestrator, loadKube } from './k8s.js';
+import { K8sOrchestrator, loadKube, sandboxImage } from './k8s.js';
 import { Worker } from './worker.js';
 
 const PORT = Number(process.env.HUB_PORT ?? 4180);
@@ -34,7 +34,7 @@ if (process.env.HUB_NO_K8S !== '1') {
     const kc = loadKube();
     const orchestrator = new K8sOrchestrator(kc, {
       namespace: NAMESPACE,
-      image: process.env.SANDBOX_IMAGE ?? '<YOUR_ACR_REGISTRY>/agenthub-demo/sandbox:dev',
+      image: sandboxImage(),
       acs: process.env.SANDBOX_ACS !== '0',
       ...(process.env.SANDBOX_PULL_SECRET ? { imagePullSecret: process.env.SANDBOX_PULL_SECRET } : {}),
       ...(process.env.SANDBOX_CONFIGMAP ? { configMapName: process.env.SANDBOX_CONFIGMAP } : {}),
@@ -45,7 +45,7 @@ if (process.env.HUB_NO_K8S !== '1') {
       namespace: NAMESPACE,
       idleTtlMinutes: Number(process.env.SANDBOX_IDLE_TTL_MINUTES ?? 120),
     }, SECRET);
-    sandbox = { connector, orchestrator, namespace: NAMESPACE, worker };
+    sandbox = { connector, orchestrator, namespace: NAMESPACE, worker, image: sandboxImage(), acs: process.env.SANDBOX_ACS !== '0' };
   } catch (e) {
     console.warn(`k8s unavailable, orchestration disabled: ${e instanceof Error ? e.message : String(e)}`);
   }

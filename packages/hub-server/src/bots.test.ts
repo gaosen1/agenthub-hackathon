@@ -38,7 +38,8 @@ class FakeOrchestrator implements PodOrchestrator {
     this.secrets.delete(name);
   }
   async createDeployment(spec: SandboxPodSpec) {
-    this.pods.set(spec.podName, 'ready');
+    // 委托 createPod：测试覆写 createPod 即可同时模拟 Deployment 创建失败
+    await this.createPod(spec);
   }
   async deleteDeployment(name: string) {
     this.pods.delete(name);
