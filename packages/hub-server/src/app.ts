@@ -13,6 +13,7 @@ import {
   CreateBotReqSchema,
   CreateHandoffReqSchema,
   ModelConfigReqSchema,
+  OssSignReqSchema,
   TERMINAL_STATUSES,
   type Bot,
   type CreateHandoffResp,
@@ -24,7 +25,7 @@ import {
 } from '@agenthub/shared';
 import type { DB } from './db.js';
 import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
-import { ossKeyOf, type OssSigner } from './oss.js';
+import { ossKeyOf, assertOwnedKey, userPrefix, SIGNED_URL_TTL_SECONDS, type OssSigner, type OssClient } from './oss.js';
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
 import { getBot, getUserModelConfig, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
@@ -66,6 +67,35 @@ const defaultPolicy = (): SandboxPolicy => ({
   orphanIntervalMs: DEFAULT_ORPHAN_INTERVAL_MS,
   workerIntervalMs: DEFAULT_WORKER_INTERVAL_MS,
 });
+
+/** 面板需要 list/head/bucketInfo；测试 Fake 只实现窄接口 OssSigner，鸭子判断 */
+const asOssClient = (s: OssSigner): OssClient | undefined =>
+  typeof (s as Partial<OssClient>).head === 'function' ? (s as OssClient) : undefined;
+
+/** S14 ?refresh=1 对账：真 list 补缺失 size；已被生命周期删掉的对象标 expired。key 均为库内自有 key，不经客户端 */
+async function reconcileOssMirror(db: DB, oss: OssClient, uid: number): Promise<void> {
+  const { objects } = await oss.list(userPrefix(uid), 1000).catch(() => ({ objects: [], truncated: false }));
+  const present = new Map(objects.map((o) => [o.key, o]));
+  const rows = db.prepare('SELECT id, input_oss_key, output_oss_key FROM handoffs WHERE user_id=?').all(uid) as Array<{
+    id: string;
+    input_oss_key: string | null;
+    output_oss_key: string | null;
+  }>;
+  for (const r of rows) {
+    for (const dir of ['input', 'output'] as const) {
+      const key = dir === 'input' ? r.input_oss_key : r.output_oss_key;
+      if (!key) continue;
+      const o = present.get(key);
+      patchHandoff(
+        db,
+        r.id,
+        o
+          ? { [`${dir}_expired`]: 0, [`${dir}_size`]: o.size, [`${dir}_uploaded_at`]: o.lastModified }
+          : { [`${dir}_expired`]: 1 },
+      );
+    }
+  }
+}
 
 /** ACP 代理转发的白名单请求头（spec §4.4） */
 const ACP_FORWARD_HEADERS = ['content-type', 'accept', 'acp-connection-id', 'acp-session-id', 'last-event-id', 'x-qwen-event-epoch'];
@@ -257,6 +287,17 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const h = ownHandoff(req);
     setStatus(db, h, 'uploaded');
     setStatus(db, h, 'queued');
+    // S12：真相时刻 head 一次落 size；head 失败不致命（不能因 OSS 抖动让上传流程失败）
+    const oss = asOssClient(signer);
+    if (oss?.configured) {
+      const key = h.input_oss_key ?? ossKeyOf(h.user_id, h.id, 'input.tar.gz');
+      await oss
+        .head(key)
+        .then((o) => {
+          if (o) patchHandoff(db, h.id, { input_size: o.size, input_uploaded_at: o.lastModified });
+        })
+        .catch(() => undefined);
+    }
     return reply.send({ status: h.status });
   });
 
@@ -550,6 +591,86 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         : null,
       policy: sandbox?.worker ? sandbox.worker.policy() : defaultPolicy(),
     };
+  });
+
+  // ── OSS 存储面板（S13/S14）：镜像到 SQLite 纯 SQL 出数据；?refresh=1 才真 list 对账 ──
+  let bucketCache: { days: number | null; at: number } | undefined;
+  app.get('/api/oss', async (req) => {
+    const { uid } = requireAuth(req);
+    const oss = asOssClient(signer);
+    const configured = !!oss?.configured;
+    const refresh = configured && (req.query as Record<string, string> | undefined)?.refresh === '1';
+    if (configured && (refresh || !bucketCache || Date.now() - bucketCache.at > 10 * 60_000)) {
+      const info = await oss!.bucketInfo().catch(() => null);
+      bucketCache = { days: info?.lifecycleDays ?? null, at: Date.now() };
+    }
+    const lifecycleDays = configured ? (bucketCache?.days ?? null) : null;
+    if (refresh) await reconcileOssMirror(db, oss!, uid);
+    const rows = db
+      .prepare(
+        `SELECT id, input_oss_key, output_oss_key, input_size, output_size, input_uploaded_at, output_uploaded_at,
+                input_expired, output_expired, terminal_target
+         FROM handoffs WHERE user_id=? AND (input_oss_key IS NOT NULL OR output_oss_key IS NOT NULL)
+         ORDER BY created_at DESC LIMIT 200`,
+      )
+      .all(uid) as Array<Record<string, unknown>>;
+    const now = Date.now();
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const timeExpired = (at: unknown) =>
+      typeof at === 'string' && !!lifecycleDays && now - Date.parse(at) > lifecycleDays * 86_400_000;
+    const items: Array<{
+      key: string;
+      size: number | null;
+      uploadedAt: string | null;
+      handoffId: string;
+      direction: 'input' | 'output';
+      partial: boolean;
+      expired: boolean;
+    }> = [];
+    for (const r of rows) {
+      const partial = r.terminal_target === 'expired' || r.terminal_target === 'cancelled';
+      if (r.input_oss_key) {
+        items.push({
+          key: r.input_oss_key as string,
+          size: (r.input_size as number) ?? null,
+          uploadedAt: (r.input_uploaded_at as string) ?? null,
+          handoffId: r.id as string,
+          direction: 'input',
+          partial,
+          expired: r.input_expired === 1 || timeExpired(r.input_uploaded_at),
+        });
+      }
+      if (r.output_oss_key) {
+        items.push({
+          key: r.output_oss_key as string,
+          size: (r.output_size as number) ?? null,
+          uploadedAt: (r.output_uploaded_at as string) ?? null,
+          handoffId: r.id as string,
+          direction: 'output',
+          partial,
+          expired: r.output_expired === 1 || timeExpired(r.output_uploaded_at),
+        });
+      }
+    }
+    return {
+      configured,
+      lifecycleDays,
+      signedUrlTtlSeconds: SIGNED_URL_TTL_SECONDS,
+      stats: {
+        totalBytes: items.reduce((s, i) => s + (i.expired ? 0 : (i.size ?? 0)), 0),
+        objectCount: items.filter((i) => !i.expired).length,
+        uploadedToday: items.filter((i) => i.uploadedAt && Date.parse(i.uploadedAt) >= startOfToday.getTime()).length,
+      },
+      items,
+    };
+  });
+
+  app.post('/api/oss/sign', async (req) => {
+    const { uid } = requireAuth(req);
+    const { key } = OssSignReqSchema.parse(req.body);
+    assertOwnedKey(uid, key);
+    return { url: await signer.signGet(key) };
   });
 
   app.get('/api/bots/:id/chats', async (req, reply) => {

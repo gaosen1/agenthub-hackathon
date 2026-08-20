@@ -6,7 +6,7 @@
 import { randomBytes } from 'node:crypto';
 import type { HandoffStatus, SandboxPolicy } from '@agenthub/shared';
 import type { DB } from './db.js';
-import type { OssSigner } from './oss.js';
+import type { OssSigner, OssClient } from './oss.js';
 import { ossKeyOf } from './oss.js';
 import { sandboxImage, type PodOrchestrator, type PodPhase, type SandboxPodInfo } from './k8s.js';
 import type { PodRef, SandboxConnector } from './connector.js';
@@ -301,6 +301,16 @@ export class Worker {
         const outputUrl = await this.signer.signPut(outputKey);
         const { manifest } = await runner.snapshot({ outputUrl });
         patchHandoff(this.db, h.id, { output_oss_key: outputKey, result_manifest: JSON.stringify(manifest) });
+        // S12：真相时刻 head 一次落 output size；失败不致命
+        const oss = typeof (this.signer as Partial<OssClient>).head === 'function' ? (this.signer as OssClient) : undefined;
+        if (oss?.configured) {
+          await oss
+            .head(outputKey)
+            .then((o) => {
+              if (o) patchHandoff(this.db, h.id, { output_size: o.size, output_uploaded_at: o.lastModified });
+            })
+            .catch(() => undefined);
+        }
         setStatus(this.db, h, target === 'failed' ? 'failed' : target);
       } catch (e) {
         setStatus(this.db, h, 'failed', `snapshot failed: ${msg(e)}`);

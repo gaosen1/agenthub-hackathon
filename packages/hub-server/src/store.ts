@@ -25,6 +25,12 @@ export interface HandoffRow {
   branch: string;
   input_oss_key: string | null;
   output_oss_key: string | null;
+  input_size: number | null;
+  output_size: number | null;
+  input_uploaded_at: string | null;
+  output_uploaded_at: string | null;
+  input_expired: number;
+  output_expired: number;
   terminal_target: string | null;
   result_manifest: string | null;
   error: string | null;

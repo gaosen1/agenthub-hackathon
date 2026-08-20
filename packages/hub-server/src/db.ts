@@ -95,6 +95,16 @@ export const MIGRATIONS: Array<(db: DB) => void> = [
   },
   // 3：sandboxes 历史表（S5）
   (db) => db.exec(SANDBOXES_DDL),
+  // 4：OSS 对象元数据镜像（S12）+ 生命周期过期标记（S14）
+  (db) => {
+    const cols = (db.prepare('PRAGMA table_info(handoffs)').all() as Array<{ name: string }>).map((c) => c.name);
+    if (!cols.includes('input_size')) db.exec('ALTER TABLE handoffs ADD COLUMN input_size INTEGER');
+    if (!cols.includes('output_size')) db.exec('ALTER TABLE handoffs ADD COLUMN output_size INTEGER');
+    if (!cols.includes('input_uploaded_at')) db.exec('ALTER TABLE handoffs ADD COLUMN input_uploaded_at TEXT');
+    if (!cols.includes('output_uploaded_at')) db.exec('ALTER TABLE handoffs ADD COLUMN output_uploaded_at TEXT');
+    if (!cols.includes('input_expired')) db.exec('ALTER TABLE handoffs ADD COLUMN input_expired INTEGER NOT NULL DEFAULT 0');
+    if (!cols.includes('output_expired')) db.exec('ALTER TABLE handoffs ADD COLUMN output_expired INTEGER NOT NULL DEFAULT 0');
+  },
 ];
 
 export function migrate(db: DB): void {

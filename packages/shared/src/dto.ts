@@ -241,3 +241,35 @@ export const SandboxListRespSchema = z.object({
   policy: SandboxPolicySchema,
 });
 export type SandboxListResp = z.infer<typeof SandboxListRespSchema>;
+
+// ---------- OSS 存储面板（S13） ----------
+
+export const OssObjectDtoSchema = z.object({
+  key: z.string(),
+  size: z.number().nullable(),
+  uploadedAt: z.string().nullable(),
+  handoffId: z.string(),
+  direction: z.enum(['input', 'output']),
+  /** 部分成果：handoff 以 expired/cancelled 终态结束 */
+  partial: z.boolean(),
+  /** 对象已被生命周期清理（refresh 对账或时间推导） */
+  expired: z.boolean(),
+});
+export type OssObjectDto = z.infer<typeof OssObjectDtoSchema>;
+
+export const OssListRespSchema = z.object({
+  configured: z.boolean(),
+  /** bucket 生命周期天数；读不到为 null，面板不显示过期时间（不编一个 7） */
+  lifecycleDays: z.number().nullable(),
+  signedUrlTtlSeconds: z.number(),
+  stats: z.object({
+    totalBytes: z.number(),
+    objectCount: z.number(),
+    uploadedToday: z.number(),
+  }),
+  items: z.array(OssObjectDtoSchema),
+});
+export type OssListResp = z.infer<typeof OssListRespSchema>;
+
+export const OssSignReqSchema = z.object({ key: z.string().min(1) });
+export type OssSignReq = z.infer<typeof OssSignReqSchema>;
