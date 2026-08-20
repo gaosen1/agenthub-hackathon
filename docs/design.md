@@ -418,3 +418,28 @@ deploy/         # K8s manifests + 镜像构建推送脚本
 - **CLI 设置消费**：优先级 显式 flag > 本地 config > 服务端 `GET /api/settings` > 缺省；离线回退本地。
 - **UI 设计系统**：`design-system/agenthub/MASTER.md`（ui-ux-pro-max 产出）——反 AI 味红线、
   `--n-*` 令牌、等宽数据列、空态一等公民；存量页面已按 t20 迁入。
+
+## 附录 C：S19/S20 接力加速（依赖缓存 + 增量 bundle）
+
+**S19 依赖缓存**：runner snapshot 时若云端 workspace 存在 `node_modules`（<1.5GB），
+打 tar 上传 `handoffs/<uid>/deps/<wsHash>.tar.gz` + sidecar（`lockHash` = package.json/lockfile 串联 sha256）；
+下次 push 上报本地 `depsLockHash`，Worker 比对 sidecar 匹配才签发缓存 GET URL；
+`/load` 与输入包并行下载、还原后解压，免重复安装。lockfile 变化即失效（照旧重装）。
+
+**S20 增量 bundle**：runner snapshot 上传 workspace `--all` 温 bundle + sidecar（head）；
+下次 push 时 hub 返回 `prevBase`（同 wsHash 最近 handoff 的 base）+ `warmBundle` 提示，
+CLI 校验 `prevBase` 为本地 HEAD 祖先且 ≠ HEAD → 只传 `prevBase..HEAD` 增量；
+Pod 集群内下载温全量 + `git fetch` 增量合成还原。`prevBase == HEAD` 或祖先校验失败回退全量。
+包压缩换系统 tar：创建优先 zstd、探测降级 gzip；解压自动识别（两侧旧包兼容）。
+
+**验收（2026-08-20）**：
+
+| 项 | 结果 |
+|---|---|
+| 本地自动化（worktree 隔离） | shared 83 / cli 5 / hub-server 80 / sandbox 10 / hub-web 54 全绿 + 四包 typecheck |
+| S19 播种/还原/失效 | 真云：`deps cache uploaded` → 二次 `deps cache restored (node_modules)` → 改 lockfile 后不还原 |
+| S20 增量/合成/pull | 真云：`✓ 增量 bundle（base …）`×3；warm+delta 合成 done；`pull --branch` 云端 commit 落独立分支 |
+| zstd | 增量包 zstd 真云解压正常；无 zstd 环境单测覆盖降级 |
+
+**语义澄清**：`/api/oss` 面板仅展示 SQL 镜像（input/output），deps/warm 对象不在面板可见范围；
+snapshot 阶段日志由 `handlePackaging` 在 snapshot 后补 relay（否则 Pod 回收后不可见）。
