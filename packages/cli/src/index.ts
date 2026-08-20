@@ -2,12 +2,12 @@
 /**
  * agenthub CLI（spec §4.7 命令面）
  */
-import { createInterface } from 'node:readline/promises';
 import { basename } from 'node:path';
 import { Command } from 'commander';
 import { getRepoInfo } from '@agenthub/shared';
 import { HubClient, HubApiError } from './api.js';
 import { configPath, loadConfig, saveConfig } from './config.js';
+import { ask, askSecret } from './prompt.js';
 import { runPush } from './push.js';
 import { runPull } from './pull.js';
 
@@ -16,8 +16,13 @@ const program = new Command();
 program.name('agenthub').description('本地 Coding Agent Session 的云端接力平台').version('0.1.0');
 
 function fail(err: unknown): never {
-  if (err instanceof HubApiError) console.error(`✗ [${err.code}] ${err.message}`);
-  else console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+  if (err instanceof HubApiError) {
+    const hint =
+      err.code === 'ERR_AUTH'
+        ? '\n  提示: token 缺失或已过期（有效期 7 天），请重新执行 ah login 获取（首次用 --register）'
+        : '';
+    console.error(`✗ [${err.code}] ${err.message}${hint}`);
+  } else console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 
@@ -30,10 +35,8 @@ program
     try {
       const cfg = loadConfig();
       if (opts.hub) cfg.hubUrl = opts.hub;
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const username = await rl.question('用户名: ');
-      const password = await rl.question('密码: ');
-      rl.close();
+      const username = await ask('用户名: ');
+      const password = await askSecret('密码: ');
       const client = new HubClient(cfg);
       const resp = opts.register ? await client.register(username, password) : await client.login(username, password);
       saveConfig({ ...cfg, token: resp.token });

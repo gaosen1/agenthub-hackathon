@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "bin": {
-    "agenthub": "./dist/index.js"
+    "agenthub": "./dist/index.js",
+    "ah": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -b",
