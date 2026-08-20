@@ -15,6 +15,7 @@ export const ERROR_CODES = [
   'ERR_STATE',
   'ERR_VALIDATION',
   'ERR_OSS',
+  'ERR_WEBHOOK',
   'ERR_K8S',
   'ERR_RUNNER',
   'ERR_MERGE_PREFIX_MISMATCH',
@@ -59,6 +60,8 @@ export const CreateHandoffReqSchema = z.object({
   botId: z.number().optional(),
   bindChatId: z.string().optional(),
   timeoutMinutes: z.number().int().positive().default(30),
+  /** S19 依赖缓存：本地 lockfile 哈希，worker 与 OSS sidecar 比对决定是否下发缓存 */
+  depsLockHash: z.string().optional(),
 });
 export type CreateHandoffReq = z.infer<typeof CreateHandoffReqSchema>;
 
@@ -281,6 +284,10 @@ export const PatchSettingsReqSchema = z.object({
   notifyChatSync: z.boolean().optional(),
   /** 钉钉 webhook 明文；服务端加密落库，响应永不回明文 */
   webhook: z.string().nullable().optional(),
+  /** handoff 默认策略（S20/S21）：CLI 真消费，服务端值优先、本地可覆盖 */
+  includeUntracked: z.boolean().optional(),
+  mergeMode: z.enum(['merge', 'branch']).optional(),
+  backupSessions: z.boolean().optional(),
 });
 export type PatchSettingsReq = z.infer<typeof PatchSettingsReqSchema>;
 
@@ -289,6 +296,9 @@ export const SettingsRespSchema = z.object({
     notifyStatusChange: z.boolean(),
     notifyChatSync: z.boolean(),
     webhook: z.object({ configured: z.boolean(), masked: z.string().nullable() }),
+    includeUntracked: z.boolean(),
+    mergeMode: z.enum(['merge', 'branch']),
+    backupSessions: z.boolean(),
   }),
   server: z.object({
     hubUrl: z.string().nullable(),

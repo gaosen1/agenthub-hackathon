@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as tar from 'tar';
@@ -6,7 +7,26 @@ import { HandoffManifestSchema } from './manifest.js';
 import type { HandoffManifest } from './manifest.js';
 
 /**
- * §3.1 输入包/返回包的打包与解包。
+ * 依赖缓存失效依据（S19）：manifest/lockfile 串联内容的 sha256；
+ * push 侧本地计算随 handoff 上报，worker 与 OSS sidecar 比对决定是否下发缓存。均不存在返回空串。
+ */
+export function computeLockHash(workspaceDir: string): string {
+  const files = ['package.json', 'pnpm-lock.yaml', 'package-lock.json', 'yarn.lock'];
+  const h = createHash('sha256');
+  let hit = false;
+  for (const f of files) {
+    const p = join(workspaceDir, f);
+    if (!existsSync(p)) continue;
+    hit = true;
+    h.update(f);
+    h.update('\0');
+    h.update(readFileSync(p));
+    h.update('\0');
+  }
+  return hit ? h.digest('hex') : '';
+}
+
+/** §3.1 输入包/返回包的打包与解包。
  * 打包统一走"staging 目录 → tar.gz"，布局即契约：
  *   manifest.json / repo.bundle|result.bundle / worktree/ / qwen-home/ / logs/
  */
