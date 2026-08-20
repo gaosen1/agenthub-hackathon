@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { HandoffDetail, SandboxEvent } from '@agenthub/shared/contracts';
 import { STEPS, TERMINAL_BAD, fmtTime, stepIndexOf } from '../statusMeta.js';
-import { cancelHandoff, dataSource, finishHandoff } from '../api/client.js';
+import { cancelHandoff, finishHandoff, useDataSource } from '../api/client.js';
 import { useHandoffEvents } from '../api/hooks.js';
 import { mockExtras } from '../api/mock.js';
 
@@ -21,6 +21,7 @@ function copyText(text: string, el: HTMLElement) {
 }
 
 export function TaskDetail({ detail: t, onOpenPull }: Props) {
+  const dataSource = useDataSource();
   const extra = mockExtras[t.id];
   const logBox = useRef<HTMLDivElement>(null);
   const stepIdx = stepIndexOf(t.status, t.timeline);

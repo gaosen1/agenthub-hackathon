@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HandoffDetail, SandboxEvent } from '@agenthub/shared/contracts';
-import { dataSource } from '../api/client.js';
+import { useDataSource } from '../api/client.js';
 import { AcpClient } from '../api/acpClient.js';
 import { useHandoffEvents } from '../api/hooks.js';
 import { mockExtras } from '../api/mock.js';
@@ -18,6 +18,7 @@ const nowHm = (): string => {
  * mock 模式：本地状态模拟回复（离线 UI 验收用）。
  */
 export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
+  const dataSource = useDataSource();
   const extra = mockExtras[t.id];
   const isHub = dataSource === 'hub';
   const canChat = t.status === 'running';

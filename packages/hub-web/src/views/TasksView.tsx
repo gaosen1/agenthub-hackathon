@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import { useHandoffDetail, useHandoffs } from '../api/hooks.js';
-import { dataSource } from '../api/client.js';
+import { useDataSource } from '../api/client.js';
 import { TaskList } from '../components/TaskList.js';
 import { TaskDetail } from '../components/TaskDetail.js';
 import { ChatPanel } from '../components/ChatPanel.js';
@@ -18,6 +18,7 @@ import { PullModal } from '../components/PullModal.js';
 export function TasksView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const dataSource = useDataSource();
   const { data: listData } = useHandoffs();
   const items = listData?.items ?? [];
   const [pullOpen, setPullOpen] = useState(false);

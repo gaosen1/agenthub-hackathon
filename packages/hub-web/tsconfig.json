@@ -14,5 +14,6 @@
     "incremental": false
   },
   "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/test"],
   "references": [{ "path": "../shared" }]
 }

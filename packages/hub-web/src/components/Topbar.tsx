@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { NavLink } from 'react-router-dom';
-import { clearToken, dataSource, getToken } from '../api/client.js';
+import { clearToken, getToken, useDataSource } from '../api/client.js';
 
 const SOURCE_META = {
   hub: { cls: '', label: 'Hub 已连接' },
@@ -16,6 +16,7 @@ const NAV = [
 ] as const;
 
 export function Topbar({ onLogin, onSettings, onBots }: { onLogin: () => void; onSettings: () => void; onBots: () => void }) {
+  const dataSource = useDataSource();
   const meta = SOURCE_META[dataSource];
   const qc = useQueryClient();
   const loggedIn = getToken() !== null && dataSource === 'hub';

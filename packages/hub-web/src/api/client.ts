@@ -13,11 +13,33 @@ import {
   ListHandoffsRespSchema,
 } from '@agenthub/shared/contracts';
 import type { AuthResp, Bot, HandoffDetail, HandoffEventsResp, ListHandoffsResp } from '@agenthub/shared/contracts';
+import { useSyncExternalStore } from 'react';
 import { mockDetails, mockSummaries } from './mock.js';
 
 export type DataSource = 'hub' | 'mock' | 'unauth';
-/** 数据来源标记：Topbar 连接指示用（随轮询刷新） */
-export let dataSource: DataSource = 'mock';
+
+/**
+ * 数据来源标记：Topbar 连接指示 + 各视图空态文案。
+ * 用可订阅的外部 store 而非裸模块变量——否则登录成功后 Hub 返回的空列表
+ * 与 401 分支的空列表深相等，TanStack Query 不触发 re-render，UI 会卡在旧文案。
+ */
+let dataSource: DataSource = 'mock';
+const dsListeners = new Set<() => void>();
+export const getDataSource = (): DataSource => dataSource;
+export function setDataSource(next: DataSource): void {
+  if (dataSource === next) return;
+  dataSource = next;
+  dsListeners.forEach((l) => l());
+}
+export function useDataSource(): DataSource {
+  return useSyncExternalStore(
+    (cb) => {
+      dsListeners.add(cb);
+      return () => dsListeners.delete(cb);
+    },
+    getDataSource,
+  );
+}
 
 const TOKEN_KEY = 'agenthub_token';
 export const getToken = (): string | null => localStorage.getItem(TOKEN_KEY);
@@ -58,7 +80,7 @@ export async function login(username: string, password: string, register = false
   }
   const auth = AuthRespSchema.parse(data);
   localStorage.setItem(TOKEN_KEY, auth.token);
-  dataSource = 'hub';
+  setDataSource('hub');
   return auth;
 }
 
@@ -67,14 +89,14 @@ export async function login(username: string, password: string, register = false
 export async function fetchHandoffs(): Promise<ListHandoffsResp> {
   try {
     const data = await hubFetch('/api/handoffs', (d) => ListHandoffsRespSchema.parse(d));
-    dataSource = 'hub';
+    setDataSource('hub');
     return data;
   } catch (e) {
     if (e instanceof AuthRequiredError) {
-      dataSource = 'unauth';
+      setDataSource('unauth');
       return { items: [] };
     }
-    dataSource = 'mock';
+    setDataSource('mock');
     return { items: mockSummaries };
   }
 }
@@ -82,11 +104,11 @@ export async function fetchHandoffs(): Promise<ListHandoffsResp> {
 export async function fetchHandoffDetail(id: string): Promise<HandoffDetail> {
   try {
     const data = await hubFetch(`/api/handoffs/${id}`, (d) => HandoffDetailSchema.parse(d));
-    dataSource = 'hub';
+    setDataSource('hub');
     return data;
   } catch (e) {
     if (e instanceof AuthRequiredError) throw e;
-    dataSource = 'mock';
+    setDataSource('mock');
     const detail = mockDetails[id];
     if (!detail) throw new Error(`handoff ${id} 不存在`);
     return detail;
