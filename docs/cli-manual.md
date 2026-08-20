@@ -23,7 +23,7 @@
 |---|---|---|
 | `--session <id>` | 当前 workspace 最近修改的 session jsonl | 显式指定移交的 session |
 | `--task <指令>` | 无（交互接力） | 带 task = **任务接力**：云端 headless 续跑，跑完自动 packaging→done；不带 = **交互接力**：云端 serve 挂起，Web/钉钉随时插话 |
-| `--include-untracked` | 关 | 快照包含未跟踪文件 |
+| `--no-include-untracked` | 缺省开 | 快照缺省含未跟踪（未被 .gitignore 忽略）文件；加此开关则只带已跟踪改动 |
 | `--bot <name>` | 无（web 载体） | 推到常驻钉钉机器人 sandbox |
 | `--chat <chatId>` | 无 | 配合 `--bot`，绑定到指定钉钉群 |
 | `--timeout <min>` | 30 | 任务接力硬超时分钟数 |

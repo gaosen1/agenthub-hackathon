@@ -73,11 +73,13 @@ export async function runPush(opts: PushOptions): Promise<void> {
     const bundlePath = join(staging, 'repo.bundle');
     createFullBundle(workspacePath, bundlePath);
 
+    // 缺省含未跟踪文件：新写但未 git add 的文件正是接力最需要带上的（--no-include-untracked 可关）
+    const includeUntracked = opts.includeUntracked ?? true;
     let worktreeDir: string | undefined;
-    if (repo.dirty || opts.includeUntracked) {
+    if (repo.dirty || includeUntracked) {
       worktreeDir = join(staging, 'worktree');
       mkdirSync(worktreeDir, { recursive: true });
-      const files = snapshotWorktree(workspacePath, worktreeDir, opts.includeUntracked ?? false);
+      const files = snapshotWorktree(workspacePath, worktreeDir, includeUntracked);
       console.log(`✓ worktree 快照 ${files.length} 个文件`);
     }
 
