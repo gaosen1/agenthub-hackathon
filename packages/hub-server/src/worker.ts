@@ -332,6 +332,8 @@ export class Worker {
           ...(warmPut && warmSidecarPut ? { warmBundlePutUrl: warmPut, warmSidecarPutUrl: warmSidecarPut } : {}),
         });
         patchHandoff(this.db, h.id, { output_oss_key: outputKey, result_manifest: JSON.stringify(manifest) });
+        // snapshot 阶段的 runner 日志（deps/warm 上传成败）补搬运，否则 Pod 回收后永远看不到
+        await this.relayLogs(h, runner).catch(() => undefined);
         // S12：真相时刻 head 一次落 output size；失败不致命
         if (oss?.configured) {
           await oss
