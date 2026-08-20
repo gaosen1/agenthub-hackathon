@@ -20,24 +20,29 @@ import {
   type HandoffResult,
   type HandoffStatus,
   type HandoffSummary,
+  type SandboxPolicy,
 } from '@agenthub/shared';
 import type { DB } from './db.js';
 import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
 import { ossKeyOf, type OssSigner } from './oss.js';
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
-import { getBot, getUserModelConfig, nowIso, patchHandoff, recordEvent, setUserModelConfig, setStatus, type BotRow, type HandoffRow } from './store.js';
+import { getBot, getUserModelConfig, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
 import { userModelSecret } from './db.js';
 import { RunnerClient } from './runner-client.js';
 import type { SandboxConnector } from './connector.js';
-import type { PodOrchestrator } from './k8s.js';
-import type { Worker } from './worker.js';
+import { SANDBOX_PORTS, SANDBOX_RESOURCES, SANDBOX_TEMPLATE, sandboxImage, type PodOrchestrator } from './k8s.js';
+import { DEFAULT_ORPHAN_INTERVAL_MS, DEFAULT_WORKER_INTERVAL_MS, type Worker } from './worker.js';
 
 export interface SandboxDeps {
   connector: SandboxConnector;
   orchestrator: PodOrchestrator;
   namespace: string;
   worker?: Worker;
+  /** 建 Pod 镜像（缺省 SANDBOX_IMAGE / 默认镜像） */
+  image?: string;
+  /** ACS 弹性算力开关（面板模板展示用） */
+  acs?: boolean;
 }
 
 export interface AppOptions {
@@ -52,6 +57,15 @@ export interface AppOptions {
 
 const newHandoffId = () => `hf-${randomBytes(3).toString('hex')}`;
 const newToken = () => randomBytes(24).toString('base64url');
+
+/** 未配置编排时的缺省策略：与实现一致的默认值，面板照样渲染（S9） */
+const defaultPolicy = (): SandboxPolicy => ({
+  defaultTimeoutMinutes: 30,
+  idleTtlMinutes: 120,
+  taskLingerMinutes: Number(process.env.TASK_LINGER_MINUTES ?? 30),
+  orphanIntervalMs: DEFAULT_ORPHAN_INTERVAL_MS,
+  workerIntervalMs: DEFAULT_WORKER_INTERVAL_MS,
+});
 
 /** ACP 代理转发的白名单请求头（spec §4.4） */
 const ACP_FORWARD_HEADERS = ['content-type', 'accept', 'acp-connection-id', 'acp-session-id', 'last-event-id', 'x-qwen-event-epoch'];
@@ -166,6 +180,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     branch: h.branch,
     baseCommit: h.base_commit,
     sessionId: h.session_id,
+    // Web 端 ChatPanel 依赖 workspacePath 作为 ACP session/load 的 cwd；缺失会导致聊天永远“连接中”
+    ...(h.workspace_path ? { workspacePath: h.workspace_path } : {}),
     ...(h.task ? { task: h.task } : {}),
     createdAt: h.created_at,
     updatedAt: h.updated_at,
@@ -419,8 +435,18 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const id = Number(info.lastInsertRowid);
 
     if (sandbox) {
-      const deployName = `bot-${id}-deploy`;
+      const slug = body.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'bot';
+      const deployName = `ah-bot-${id}-${slug}`;
       const runnerToken = newToken();
+      // 先落历史行再建 Pod：建不出来的实例也要在面板上看得见（S6）
+      recordSandboxCreate(db, {
+        podName: deployName,
+        userId: uid,
+        kind: 'bot',
+        image: sandbox.image ?? sandboxImage(),
+        namespace: sandbox.namespace,
+        botId: id,
+      });
       try {
         const modelRefs = await ensureModelSecret(uid);
         await sandbox.orchestrator.createSecret(`bot-${id}`, {
@@ -436,9 +462,12 @@ export function buildApp(opts: AppOptions): FastifyInstance {
           labels: { 'agenthub/kind': 'bot', 'agenthub/owner': String(uid), 'agenthub/bot': String(id) },
         });
         db.prepare("UPDATE bots SET pod_name=?, runner_token=?, status='running' WHERE id=?").run(deployName, runnerToken, id);
+        recordSandboxReady(db, deployName);
       } catch (e) {
         db.prepare("UPDATE bots SET status='error' WHERE id=?").run(id);
-        throw fail(502, 'ERR_K8S', `bot sandbox create failed: ${e instanceof Error ? e.message : String(e)}`);
+        const m = e instanceof Error ? e.message : String(e);
+        recordSandboxReclaim(db, deployName, 'failed', 'pod-failed', m);
+        throw fail(502, 'ERR_K8S', `bot sandbox create failed: ${m}`);
       }
     }
     return reply.status(201).send(toBot(getBot(db, id)!));
@@ -455,9 +484,72 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       }
       await sandbox.orchestrator.deleteSecret(`bot-${bot.id}`).catch(() => undefined);
     }
+    if (bot.pod_name) recordSandboxReclaim(db, bot.pod_name, 'reclaimed', 'bot-deleted');
     // 软删时重命名，腾出 UNIQUE(user_id,name)，允许同名重建
     db.prepare("UPDATE bots SET status='deleted', pod_name=NULL, name=name||'.deleted.'||id WHERE id=?").run(bot.id);
     return reply.status(204).send();
+  });
+
+  // ── Sandbox 面板（S9）：历史行 + 模板 + 真实策略，恒带 WHERE user_id ──
+  app.get('/api/sandboxes', async (req) => {
+    const { uid } = requireAuth(req);
+    const raw = Number((req.query as Record<string, string> | undefined)?.windowHours);
+    const windowHours = Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 720) : 24;
+    const rows = db
+      .prepare(
+        `SELECT * FROM sandboxes WHERE user_id=? AND (status IN ('provisioning','running') OR ended_at > datetime('now', ?))
+         ORDER BY created_at DESC`,
+      )
+      .all(uid, `-${windowHours} hours`) as SandboxRow[];
+    const now = Date.now();
+    // SQLite datetime() 产出无时区后缀的 UTC 串，统一按 UTC 解析，避免本地时区偏移
+    const parseTs = (s: string) => Date.parse(/(Z|[+-]\d{2}:?\d{2})$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
+    const isOpen = (r: SandboxRow) => r.status === 'provisioning' || r.status === 'running';
+    const items = rows.map((r) => ({
+      podName: r.pod_name,
+      kind: r.kind,
+      handoffId: r.handoff_id,
+      botId: r.bot_id,
+      image: r.image,
+      status: r.status,
+      createdAt: r.created_at,
+      readyAt: r.ready_at,
+      endedAt: r.ended_at,
+      durationSeconds: r.duration_seconds,
+      reclaimReason: r.reclaim_reason,
+      lastError: r.last_error,
+    }));
+    // 累计执行时长把仍在运行的实例算进去，否则跑了半小时的 sandbox 会报 0
+    const execSecondsInWindow = rows.reduce((sum, r) => {
+      if (isOpen(r)) return sum + (r.ready_at ? Math.max(0, Math.floor((now - parseTs(r.ready_at)) / 1000)) : 0);
+      return sum + (r.duration_seconds ?? 0);
+    }, 0);
+    const running = (db.prepare("SELECT COUNT(*) c FROM sandboxes WHERE user_id=? AND status IN ('provisioning','running')").get(uid) as { c: number }).c;
+    const configured = !!sandbox;
+    return {
+      configured,
+      windowHours,
+      items,
+      stats: {
+        running,
+        reclaimedInWindow: rows.filter((r) => !isOpen(r)).length,
+        templates: configured ? 1 : 0,
+        execSecondsInWindow,
+      },
+      template: configured
+        ? {
+            image: sandbox!.image ?? sandboxImage(),
+            namespace: sandbox!.namespace,
+            baseImage: SANDBOX_TEMPLATE.baseImage,
+            qwenVersion: SANDBOX_TEMPLATE.qwenVersion,
+            toolchain: [...SANDBOX_TEMPLATE.toolchain],
+            resources: { ...SANDBOX_RESOURCES },
+            ports: { ...SANDBOX_PORTS },
+            acs: sandbox!.acs ?? true,
+          }
+        : null,
+      policy: sandbox?.worker ? sandbox.worker.policy() : defaultPolicy(),
+    };
   });
 
   app.get('/api/bots/:id/chats', async (req, reply) => {
