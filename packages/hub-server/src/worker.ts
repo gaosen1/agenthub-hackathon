@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import type { HandoffStatus, SandboxPolicy } from '@agenthub/shared';
 import type { DB } from './db.js';
 import type { OssSigner, OssClient } from './oss.js';
-import { ossKeyOf } from './oss.js';
+import { ossKeyOf, asOssClient, depsCacheKeyOf, depsSidecarKeyOf } from './oss.js';
 import { sandboxImage, type PodOrchestrator, type PodPhase, type SandboxPodInfo } from './k8s.js';
 import type { PodRef, SandboxConnector } from './connector.js';
 import { RunnerClient } from './runner-client.js';
@@ -216,8 +216,21 @@ export class Worker {
         }
         const runner = await this.runnerOf(h);
         const inputUrl = await this.signer.signGet(h.input_oss_key ?? ossKeyOf(h.user_id, h.id, 'input.tar.gz'));
+        // S19 依赖缓存：sidecar lockHash 与本次 push 匹配才下发缓存 GET URL，否则照旧重装
+        let depsCacheUrl: string | undefined;
+        const ossForDeps = asOssClient(this.signer);
+        if (ossForDeps?.configured && h.deps_lock_hash) {
+          const meta = await ossForDeps
+            .get(depsSidecarKeyOf(h.user_id, h.ws_hash))
+            .then((b) => (b ? (JSON.parse(b.toString('utf8')) as { lockHash?: string }) : null))
+            .catch(() => null);
+          if (meta?.lockHash === h.deps_lock_hash) {
+            depsCacheUrl = await this.signer.signGet(depsCacheKeyOf(h.user_id, h.ws_hash));
+          }
+        }
         await runner.load({
           inputUrl,
+          ...(depsCacheUrl ? { depsCacheUrl } : {}),
           ...(h.task ? { task: h.task } : {}),
           ...(h.bind_chat_id ? { bindChatId: h.bind_chat_id } : {}),
           ...(h.serve_token ? { serveToken: h.serve_token } : {}),
@@ -303,10 +316,16 @@ export class Worker {
         await this.relayLogs(h, runner);
         const outputKey = ossKeyOf(h.user_id, h.id, 'output.tar.gz');
         const outputUrl = await this.signer.signPut(outputKey);
-        const { manifest } = await runner.snapshot({ outputUrl });
+        // S19 依赖缓存：签发快照/sidecar PUT URL，runner 侧决定是否真传
+        const oss = asOssClient(this.signer);
+        const depsPut = oss?.configured ? await this.signer.signPut(depsCacheKeyOf(h.user_id, h.ws_hash)) : undefined;
+        const sidecarPut = oss?.configured ? await this.signer.signPut(depsSidecarKeyOf(h.user_id, h.ws_hash)) : undefined;
+        const { manifest } = await runner.snapshot({
+          outputUrl,
+          ...(depsPut && sidecarPut ? { depsCachePutUrl: depsPut, depsSidecarPutUrl: sidecarPut } : {}),
+        });
         patchHandoff(this.db, h.id, { output_oss_key: outputKey, result_manifest: JSON.stringify(manifest) });
         // S12：真相时刻 head 一次落 output size；失败不致命
-        const oss = typeof (this.signer as Partial<OssClient>).head === 'function' ? (this.signer as OssClient) : undefined;
         if (oss?.configured) {
           await oss
             .head(outputKey)

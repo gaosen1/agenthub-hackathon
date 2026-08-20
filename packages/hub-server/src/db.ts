@@ -117,6 +117,11 @@ export const MIGRATIONS: Array<(db: DB) => void> = [
     const cols = (db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((c) => c.name);
     if (!cols.includes('token_version')) db.exec('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1');
   },
+  // 7：依赖缓存失效依据（S19）：push 侧上报 lockfile 哈希
+  (db) => {
+    const cols = (db.prepare('PRAGMA table_info(handoffs)').all() as Array<{ name: string }>).map((c) => c.name);
+    if (!cols.includes('deps_lock_hash')) db.exec('ALTER TABLE handoffs ADD COLUMN deps_lock_hash TEXT');
+  },
 ];
 
 export function migrate(db: DB): void {

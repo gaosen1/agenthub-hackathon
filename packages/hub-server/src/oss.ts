@@ -43,11 +43,21 @@ export interface OssClient extends OssSigner {
   readonly configured: boolean;
   list(prefix: string, max?: number): Promise<{ objects: OssObject[]; truncated: boolean }>;
   head(key: string): Promise<OssObject | null>;
+  /** 读取小对象内容（sidecar 等）；404 返回 null */
+  get(key: string): Promise<Buffer | null>;
   bucketInfo(): Promise<BucketInfo | null>;
 }
 
 export const ossKeyOf = (userId: number, handoffId: string, file: 'input.tar.gz' | 'output.tar.gz') =>
   `handoffs/${userId}/${handoffId}/${file}`;
+
+/** S19 依赖缓存对象 key（落用户前缀下，受归属校验与生命周期约束） */
+export const depsCacheKeyOf = (userId: number, wsHash: string) => `handoffs/${userId}/deps/${wsHash}.tar.gz`;
+export const depsSidecarKeyOf = (userId: number, wsHash: string) => `handoffs/${userId}/deps/${wsHash}.json`;
+
+/** 需要 list/head/get 等宽接口时鸭子判断；测试 Fake 只实现窄 OssSigner 则返回 undefined */
+export const asOssClient = (s: OssSigner): OssClient | undefined =>
+  typeof (s as Partial<OssClient>).head === 'function' ? (s as OssClient) : undefined;
 
 /** 某用户名下所有对象的 key 前缀 */
 export const userPrefix = (userId: number) => `handoffs/${userId}/`;
@@ -75,6 +85,9 @@ class NullOssClient implements OssClient {
     return { objects: [], truncated: false };
   }
   async head() {
+    return null;
+  }
+  async get() {
     return null;
   }
   async bucketInfo() {
@@ -172,6 +185,16 @@ class AliOssClient implements OssClient {
       // 对象不存在（已过期被生命周期清理）是正常情况，不是错误
       if ((e as { status?: number }).status === 404) return null;
       throw fail(502, 'ERR_OSS', `oss head failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async get(key: string): Promise<Buffer | null> {
+    try {
+      const res = await this.client.get(key);
+      return res.content as Buffer;
+    } catch (e) {
+      if ((e as { status?: number }).status === 404) return null;
+      throw fail(502, 'ERR_OSS', `oss get failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

@@ -26,7 +26,7 @@ import {
 } from '@agenthub/shared';
 import type { DB } from './db.js';
 import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
-import { ossKeyOf, assertOwnedKey, userPrefix, SIGNED_URL_TTL_SECONDS, type OssSigner, type OssClient } from './oss.js';
+import { ossKeyOf, assertOwnedKey, userPrefix, asOssClient, SIGNED_URL_TTL_SECONDS, type OssSigner, type OssClient } from './oss.js';
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
 import { getBot, getUserModelConfig, getSettings, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setSetting, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
@@ -68,10 +68,6 @@ const defaultPolicy = (): SandboxPolicy => ({
   orphanIntervalMs: DEFAULT_ORPHAN_INTERVAL_MS,
   workerIntervalMs: DEFAULT_WORKER_INTERVAL_MS,
 });
-
-/** 面板需要 list/head/bucketInfo；测试 Fake 只实现窄接口 OssSigner，鸭子判断 */
-const asOssClient = (s: OssSigner): OssClient | undefined =>
-  typeof (s as Partial<OssClient>).head === 'function' ? (s as OssClient) : undefined;
 
 /** webhook 掩码：只留 access_token 尾 4 位，响应永不回明文（S16） */
 const maskWebhook = (url: string): string => {
@@ -277,12 +273,12 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const inputKey = ossKeyOf(uid, id, 'input.tar.gz');
     db.prepare(
       `INSERT INTO handoffs (id, user_id, agent_name, workspace_path, ws_hash, session_id, task, timeout_minutes,
-        status, kind, bot_id, bind_chat_id, base_commit, branch, input_oss_key, created_at, updated_at, last_active_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        status, kind, bot_id, bind_chat_id, base_commit, branch, input_oss_key, deps_lock_hash, created_at, updated_at, last_active_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       id, uid, body.agentName, body.workspacePath, body.wsHash, body.sessionId, body.task ?? null,
       body.timeoutMinutes, 'created', body.kind, body.botId ?? null, body.bindChatId ?? null,
-      body.baseCommit, body.branch, inputKey, at, at, at,
+      body.baseCommit, body.branch, inputKey, body.depsLockHash ?? null, at, at, at,
     );
     recordEvent(db, id, 'status', 'created');
     let uploadUrl: string;
@@ -696,6 +692,9 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         notifyStatusChange: (raw['notifyStatusChange'] ?? '1') === '1',
         notifyChatSync: (raw['notifyChatSync'] ?? '0') === '1',
         webhook: webhookPlain ? { configured: true, masked: maskWebhook(webhookPlain) } : { configured: false, masked: null },
+        includeUntracked: (raw['includeUntracked'] ?? '1') === '1',
+        mergeMode: raw['mergeMode'] === 'branch' ? 'branch' : 'merge',
+        backupSessions: (raw['backupSessions'] ?? '0') === '1',
       },
       server: {
         hubUrl: process.env.HUB_WEB_URL ?? null,
@@ -714,6 +713,9 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     if (body.notifyStatusChange !== undefined) setSetting(db, uid, 'notifyStatusChange', body.notifyStatusChange ? '1' : '0');
     if (body.notifyChatSync !== undefined) setSetting(db, uid, 'notifyChatSync', body.notifyChatSync ? '1' : '0');
     if (body.webhook !== undefined) setSetting(db, uid, 'dingtalkWebhook', body.webhook ? encryptSecret(body.webhook, secret) : '');
+    if (body.includeUntracked !== undefined) setSetting(db, uid, 'includeUntracked', body.includeUntracked ? '1' : '0');
+    if (body.mergeMode !== undefined) setSetting(db, uid, 'mergeMode', body.mergeMode);
+    if (body.backupSessions !== undefined) setSetting(db, uid, 'backupSessions', body.backupSessions ? '1' : '0');
     return { ok: true };
   });
 
@@ -723,6 +725,25 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       .prepare('UPDATE users SET token_version = token_version + 1 WHERE id=? RETURNING token_version, username')
       .get(uid) as { token_version: number; username: string };
     return { token: signJwt({ uid, sub: row.username, tv: row.token_version }, secret) };
+  });
+
+  // S19「测试」按钮的真实成败反馈：向输入框 URL（未存）或已存 webhook 发一条测试消息
+  app.post('/api/settings/webhook/test', async (req) => {
+    const { uid } = requireAuth(req);
+    const body = (req.body ?? {}) as { url?: string };
+    const raw = getSettings(db, uid);
+    const enc = typeof body.url === 'string' && body.url ? encryptSecret(body.url, secret) : (raw['dingtalkWebhook'] ?? '');
+    if (!enc) throw fail(400, 'ERR_VALIDATION', 'webhook not configured');
+    const url = decryptSecret(enc, secret);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ msgtype: 'text', text: 'AgentHub webhook 连通性测试' }),
+    }).catch(() => null);
+    if (!res || !res.ok) {
+      throw fail(502, 'ERR_WEBHOOK', `webhook test failed${res ? `: HTTP ${res.status}` : ': network error'}`);
+    }
+    return { ok: true };
   });
 
   app.get('/api/bots/:id/chats', async (req, reply) => {

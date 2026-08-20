@@ -23,6 +23,7 @@ export interface HandoffRow {
   runner_token: string | null;
   base_commit: string;
   branch: string;
+  deps_lock_hash: string | null;
   input_oss_key: string | null;
   output_oss_key: string | null;
   input_size: number | null;
