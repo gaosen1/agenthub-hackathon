@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerE
 import type { HandoffDetail, SandboxEvent } from '@agenthub/shared/contracts';
 import { useDataSource } from '../api/client.js';
 import { AcpClient } from '../api/acpClient.js';
+import type { AcpCaps } from '../api/acpClient.js';
 import { useHandoffEvents } from '../api/hooks.js';
 import { mockExtras } from '../api/mock.js';
 import type { ChatMsg } from '../api/mock.js';
@@ -45,6 +46,8 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
   const [text, setText] = useState('');
   const [conn, setConn] = useState<'idle' | 'connecting' | 'ready' | 'error'>('idle');
   const [connErr, setConnErr] = useState('');
+  const [caps, setCaps] = useState<AcpCaps | null>(null);
+  const [switchErr, setSwitchErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [chatW, setChatW] = useState<number>(() => {
     try {
@@ -90,6 +93,8 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
     if (!isHub || !canChat || !t.workspacePath) return;
     setConn('connecting');
     setConnErr('');
+    setCaps(null);
+    setSwitchErr('');
     streamIdx.current = -1;
     const client = new AcpClient(t.id, {
       onUpdate: (p) => {
@@ -122,7 +127,10 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
     acp.current = client;
     client
       .connect(t.sessionId, t.workspacePath)
-      .then(() => setConn('ready'))
+      .then((c) => {
+        setCaps(c);
+        setConn('ready');
+      })
       .catch((e: unknown) => {
         setConn('error');
         setConnErr(e instanceof Error ? e.message : String(e));
@@ -197,6 +205,28 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
   const rounds = extra?.rounds;
   const shown = [...taskHistory, ...msgs];
 
+  // 运行时切换 qwen code 模式 / 模型（ACP session/set_mode、session/set_model）
+  const switchMode = (modeId: string) => {
+    if (!acp.current) return;
+    void acp.current
+      .setMode(t.sessionId, modeId)
+      .then(() => {
+        setCaps((c) => (c ? { ...c, currentModeId: modeId } : c));
+        setSwitchErr('');
+      })
+      .catch((e: unknown) => setSwitchErr(e instanceof Error ? e.message : String(e)));
+  };
+  const switchModel = (modelId: string) => {
+    if (!acp.current) return;
+    void acp.current
+      .setModel(t.sessionId, modelId)
+      .then(() => {
+        setCaps((c) => (c ? { ...c, currentModelId: modelId } : c));
+        setSwitchErr('');
+      })
+      .catch((e: unknown) => setSwitchErr(e instanceof Error ? e.message : String(e)));
+  };
+
   return (
     <aside className="chat">
       <div
@@ -227,6 +257,35 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
           <i className="fa-regular fa-file-lines" /> {t.sessionId}.jsonl
           {rounds !== undefined ? ` · 本地 ${rounds} 轮已接力` : ''}
         </div>
+        {isHub && conn === 'ready' && caps && (caps.modes.length > 0 || caps.models.length > 0) && (
+          <div className="caps">
+            {caps.modes.length > 0 && (
+              <label>
+                模式
+                <select value={caps.currentModeId} onChange={(e) => switchMode(e.target.value)}>
+                  {caps.modes.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {caps.models.length > 0 && (
+              <label>
+                模型
+                <select value={caps.currentModelId} onChange={(e) => switchModel(e.target.value)}>
+                  {caps.models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {switchErr && <span className="caps-err">{switchErr.slice(0, 60)}</span>}
+          </div>
+        )}
       </div>
       <div className="chat-body" ref={body}>
         <div className="sysline">

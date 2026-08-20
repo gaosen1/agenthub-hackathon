@@ -12,6 +12,14 @@ export interface AcpEvents {
   onError: (message: string) => void;
 }
 
+/** session/load 返回的模式/模型能力（qwen code 的 mode 与模型清单） */
+export interface AcpCaps {
+  modes: string[];
+  currentModeId: string;
+  models: string[];
+  currentModelId: string;
+}
+
 export class AcpClient {
   private rpcId = 0;
   private connId = '';
@@ -131,8 +139,8 @@ export class AcpClient {
     })();
   }
 
-  /** initialize → 连接级 SSE → session/load → session 级 SSE */
-  async connect(sessionId: string, cwd: string): Promise<void> {
+  /** initialize → 连接级 SSE → session/load → session 级 SSE；返回模式/模型能力 */
+  async connect(sessionId: string, cwd: string): Promise<AcpCaps> {
     const initId = await this.post('initialize', { protocolVersion: 1 });
     await this.waitResp(initId, 30_000);
     await this.openSse();
@@ -140,6 +148,30 @@ export class AcpClient {
     const resp = await this.waitResp(loadId, 60_000);
     if (resp.error) throw new Error(`session/load 失败: ${resp.error.message}`);
     await this.openSse({ 'acp-session-id': sessionId });
+    const r = (resp.result ?? {}) as {
+      modes?: { currentModeId?: string; availableModes?: Array<{ id?: string }> };
+      models?: { currentModelId?: string; availableModels?: Array<{ id?: string }> };
+    };
+    return {
+      modes: (r.modes?.availableModes ?? []).map((m) => m.id ?? '').filter(Boolean),
+      currentModeId: r.modes?.currentModeId ?? '',
+      models: (r.models?.availableModels ?? []).map((m) => m.id ?? '').filter(Boolean),
+      currentModelId: r.models?.currentModelId ?? '',
+    };
+  }
+
+  /** 运行时切换审批模式（qwen code：plan/default/auto-edit/auto/yolo） */
+  async setMode(sessionId: string, modeId: string): Promise<void> {
+    const id = await this.post('session/set_mode', { sessionId, modeId });
+    const resp = await this.waitResp(id, 15_000);
+    if (resp.error) throw new Error(`set_mode 失败: ${resp.error.message}`);
+  }
+
+  /** 运行时切换模型 */
+  async setModel(sessionId: string, modelId: string): Promise<void> {
+    const id = await this.post('session/set_model', { sessionId, modelId });
+    const resp = await this.waitResp(id, 15_000);
+    if (resp.error) throw new Error(`set_model 失败: ${resp.error.message}`);
   }
 
   /** 发一轮 prompt；应答帧到达即本轮完成 */
