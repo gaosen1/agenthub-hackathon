@@ -255,13 +255,13 @@
     对齐现有 `HUB_NO_K8S` 先例
   - 验收：**无任何 OSS 环境变量时服务器能正常启动**
 
-- [ ] **S12 对象元数据落库**（依赖 S2 迁移机制）
+- [x] **S12 对象元数据落库**（依赖 S2 迁移机制）
   - 文件：`src/db.ts`（加列 `input_size`/`output_size`/`input_uploaded_at`/`output_uploaded_at`）、
     `src/app.ts`（`POST /:id/uploaded`）、`src/worker.ts`（snapshot 之后）
   - 在真相时刻各做一次 `head()` 填 size——一个对象一生一次 head，而不是几千次 list
   - 验收：size/uploaded_at 落库；**head 失败不致命**（不能因为 OSS 抖动就让上传流程失败）
 
-- [ ] **S13 `GET /api/oss` + `POST /api/oss/sign`**
+- [x] **S13 `GET /api/oss` + `POST /api/oss/sign`**
   - 文件：`src/app.ts`、`packages/shared/src/dto.ts`
   - `GET /api/oss` 纯 SQL 出数据：总占用 = `SUM(sizes)`；对象数；今日上传 = 按 uploaded_at 计数；
     签名 URL 有效期 = `oss.ts` 里字面量 `1800` 作为 config 暴露；`configured: false` 时 UI 渲染未配置
@@ -269,13 +269,13 @@
   - `POST /api/oss/sign` 走 `assertOwnedKey` 再 `signGet`
   - 验收：**他人 key → 403**、含 `..` 的 key → 403
 
-- [ ] **S14 ⚠️需凭证：`?refresh=1` 对账**
+- [x] **S14 ⚠️需凭证：`?refresh=1` 对账**
   - 文件：`src/app.ts`
   - 只有显式 `?refresh=1` 才做真 `list()` 对账，顺便把已被 7 天生命周期删掉的对象标记 expired——
     这也是「过期」在 UI 上唯一能变真的途径
   - 验收：未配置 OSS 时该路径 no-op 且测试全绿（**不能因为没凭证就阻塞**）
 
-- [ ] **S15 OssView 界面**
+- [x] **S15 OssView 界面**
   - 文件：`src/views/OssView.tsx`、新 `src/api/oss.ts`
   - 真实对象表 + 复制签名链接 + 关联 handoff 深链
   - **BYO Bucket（「切换为自有 Bucket」）本次不做**：按钮 disabled + 「当前使用平台托管 Bucket」提示。
@@ -286,7 +286,7 @@
 
 ## Phase 3 — 设置面板
 
-- [ ] **S16 `user_settings` 表 + `GET/PATCH /api/settings`**
+- [x] **S16 `user_settings` 表 + `GET/PATCH /api/settings`**
   - 文件：`src/db.ts`、`src/app.ts`、`packages/shared/src/dto.ts`
   ```sql
   CREATE TABLE IF NOT EXISTS user_settings (
@@ -302,7 +302,7 @@
   - 验收：**响应里永不回传 webhook 明文**，只回 `{configured: true, masked: '…access_token=••••'}`；
     测试里 grep 响应体确认无明文
 
-- [ ] **S17 API Token 真失效**（依赖 S2）
+- [x] **S17 API Token 真失效**（依赖 S2）
   - 文件：`src/db.ts`（`users.token_version INTEGER NOT NULL DEFAULT 1`）、`src/auth.ts`、`src/app.ts`
   - `JwtPayload` 加 `tv`。`verifyJwt` 保持无状态（它拿不到 DB），检查放在 `app.ts` 的 `requireAuth`：
     verify 之后一次主键查询，`token_version !== payload.tv` → 401 `ERR_AUTH`
@@ -310,7 +310,7 @@
   - **不接受 `tv ?? 1` 兜底**——那是永久绕过，宁可强制重登一次
   - 验收：轮换后旧 token → 401，新 token → 200
 
-- [ ] **S18 ⚠️涉网：状态变更通知器**
+- [x] **S18 ⚠️涉网：状态变更通知器**
   - 文件：新 `src/notifier.ts`、`src/worker.ts`
   - **不要挂 `setStatus`**：`store.ts` 的 `setStatus` 是正确的语义点，但它是同步、纯 DB 的函数，
     被 14 处调用；把 notifier 穿进去会让一个纯写操作做网络 IO
@@ -323,18 +323,18 @@
   - 验收：fetch 可注入；测试打**本地 http server**（照抄 `worker.test.ts` 里已有的写法），
     **绝不真连 oapi.dingtalk.com**
 
-- [ ] **S19 SettingsView 界面**
+- [x] **S19 SettingsView 界面**
   - 文件：`src/views/SettingsView.tsx`、新 `src/api/settings.ts`
   - 真实值；「测试」按钮有真实成败反馈
   - 「API Token」不是原型里的 `ahk-9f2c81de…`——**不存在那种 token 类型，就是 JWT**
   - 「本地缓存清理」是 CLI 本机行为，服务端管不到 → 渲染成只读「CLI 本机配置」+ 可复制命令（用已有 `.cmd` 类）
   - 验证：+ `pnpm -C packages/hub-web build`
 
-- [ ] **S20 CLI 配置扩展**
+- [x] **S20 CLI 配置扩展**
   - 文件：`packages/cli/src/config.ts`（`CliConfig` 目前只有 `{hubUrl, token?}`）、`src/api.ts`
   - 扩展 `includeUntracked` / `mergeMode` / `backupSessions`；新增 `agenthub config set`
 
-- [ ] **S21 CLI 真正消费服务端设置**
+- [x] **S21 CLI 真正消费服务端设置**
   - 文件：`packages/cli/src/push.ts`、`src/pull.ts`
   - push/pull 拉 `GET /api/settings` 并**真正生效**（服务端值优先，本地可覆盖，离线回退本地）
   - **这一片是「设置项不是假开关」的唯一保证**——没有它，合并策略/未跟踪文件/自动备份
@@ -345,12 +345,12 @@
 
 ## Phase 4 — 收口
 
-- [ ] **S22 降级矩阵 + e2e**
+- [x] **S22 降级矩阵 + e2e**
   - `{无 OSS 凭证} × {HUB_NO_K8S=1} × {未登录}` 每种组合下，每个面板都要渲染合理空态：
     **不能白屏、不能显示假数字**
   - 扩 `packages/hub-server/src/stack.e2e.test.ts` 覆盖所有新端点
 
-- [ ] **S23 部署与文档 + 真云验证**
+- [x] **S23 部署与文档 + 真云验证**
   - 新环境变量（`HUB_NO_OSS` 等）进 `deploy/k8s/20-hub.yaml`
   - `docs/spec.md` / `docs/design.md` 补新路由、新表、新 DTO
   - 真云验证（**已获授权**）：真 ACK 建删一个 pod + 真 OSS 读写一轮，
