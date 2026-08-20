@@ -11,6 +11,7 @@ import { createOssClient } from './oss.js';
 import { DirectConnector, PortForwardConnector, type SandboxConnector } from './connector.js';
 import { K8sOrchestrator, loadKube, sandboxImage } from './k8s.js';
 import { Worker } from './worker.js';
+import { Notifier } from './notifier.js';
 
 const PORT = Number(process.env.HUB_PORT ?? 4180);
 const DB_PATH = process.env.HUB_DB_PATH ?? './data/hub.sqlite';
@@ -44,7 +45,7 @@ if (process.env.HUB_NO_K8S !== '1') {
     worker = new Worker(db, orchestrator, connector, signer, {
       namespace: NAMESPACE,
       idleTtlMinutes: Number(process.env.SANDBOX_IDLE_TTL_MINUTES ?? 120),
-    }, SECRET);
+    }, SECRET, new Notifier(db, SECRET));
     sandbox = { connector, orchestrator, namespace: NAMESPACE, worker, image: sandboxImage(), acs: process.env.SANDBOX_ACS !== '0' };
   } catch (e) {
     console.warn(`k8s unavailable, orchestration disabled: ${e instanceof Error ? e.message : String(e)}`);

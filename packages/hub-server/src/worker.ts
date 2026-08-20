@@ -32,6 +32,7 @@ import {
 } from './store.js';
 import { userModelSecret } from './db.js';
 import { decryptSecret } from './crypto.js';
+import type { Notifier } from './notifier.js';
 
 export interface WorkerConfig {
   namespace: string;
@@ -63,6 +64,7 @@ export class Worker {
     private readonly signer: OssSigner,
     private readonly cfg: WorkerConfig,
     private readonly secret: string,
+    private readonly notifier?: Notifier,
   ) {}
 
   start(intervalMs = DEFAULT_WORKER_INTERVAL_MS, orphanIntervalMs = DEFAULT_ORPHAN_INTERVAL_MS): void {
@@ -147,6 +149,8 @@ export class Worker {
       await this.handleProvisioning();
       await this.handleRunning();
       await this.handlePackaging();
+      // S18：状态变更通知单点驱动，失败不影响主流程
+      await this.notifier?.notifyPending().catch(() => undefined);
     } finally {
       this.ticking = false;
     }
