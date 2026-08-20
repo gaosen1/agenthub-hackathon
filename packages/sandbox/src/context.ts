@@ -66,6 +66,41 @@ export async function restoreContext(staging: string, manifest: HandoffManifest)
   }
 }
 
+// ── 云端模型配置覆盖（spec §8.1）────────────────────
+/**
+ * 沙箱内必须使用集群注入的 OPENAI_* 环境变量（agenthub-model / per-user Secret，
+ * 公网可达端点）。随 push 包还原的本地 settings.json 可能指向办公网端点，
+ * Pod 不可达必然超时（hf-9974ad 实测 45s timeout），故无条件覆盖。
+ */
+export function applyCloudModelSettings(settings: Record<string, unknown>): void {
+  settings['model'] = { name: '$OPENAI_MODEL', baseUrl: '$OPENAI_BASE_URL' };
+  settings['modelProviders'] = {
+    openai: [
+      {
+        id: '$OPENAI_MODEL',
+        name: '[AgentHub] cloud model',
+        envKey: 'OPENAI_API_KEY',
+        baseUrl: '$OPENAI_BASE_URL',
+      },
+    ],
+  };
+  settings['security'] = { auth: { selectedType: 'openai' } };
+}
+
+/** web 模式：还原后仅覆盖模型配置，其余本地设置保持不动 */
+export async function writeCloudModelConfig(home: string): Promise<void> {
+  const settingsPath = join(home, 'settings.json');
+  let settings: Record<string, unknown> = {};
+  try {
+    settings = JSON.parse(await fs.readFile(settingsPath, 'utf8')) as Record<string, unknown>;
+  } catch {
+    // 无现成配置：从空对象开始
+  }
+  applyCloudModelSettings(settings);
+  await fs.mkdir(home, { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
+}
+
 // ── bot channel 配置注入（spec §8.1 语义）────────────────
 export async function writeChannelsConfig(home: string, botName: string, workspacePath: string): Promise<void> {
   const settingsPath = join(home, 'settings.json');
@@ -81,7 +116,8 @@ export async function writeChannelsConfig(home: string, botName: string, workspa
     clientId: '$DINGTALK_CLIENT_ID',
     clientSecret: '$DINGTALK_CLIENT_SECRET',
     cwd: workspacePath,
-    sessionScope: 'perChat',
+    // 按群路由的会话隔离由 routes.json 承担（§8.2），sessionScope 保持 single
+    sessionScope: 'single',
     senderPolicy: 'open',
     groupPolicy: 'open',
     dmPolicy: 'open',
@@ -94,33 +130,8 @@ export async function writeChannelsConfig(home: string, botName: string, workspa
   delete settings['hooks'];
   // 云端沙箱内无人值守，工具审批改为 yolo，避免群里每个操作都要 /approve
   settings['tools'] = { ...(settings['tools'] as Record<string, unknown> | undefined), approvalMode: 'yolo' };
-  // qwen serve 需要完整的模型 provider 配置才能用正确的端点和 key
-  if (!settings['model']) {
-    settings['model'] = {
-      name: '$OPENAI_MODEL',
-      baseUrl: '$OPENAI_BASE_URL',
-    };
-  }
-  if (!settings['modelProviders']) {
-    settings['modelProviders'] = {
-      openai: [
-        {
-          id: '$OPENAI_MODEL',
-          name: '[DashScope] model',
-          envKey: 'DASHSCOPE_API_KEY',
-          baseUrl: '$OPENAI_BASE_URL',
-        },
-      ],
-    };
-  }
-  if (!settings['security']) {
-    settings['security'] = { auth: { selectedType: 'openai' } };
-  }
-  const env = (settings['env'] as Record<string, unknown> | undefined) ?? {};
-  if (!env['DASHSCOPE_API_KEY']) {
-    env['DASHSCOPE_API_KEY'] = '$DASHSCOPE_API_KEY';
-  }
-  settings['env'] = env;
+  // 云端模型配置无条件覆盖（还原的本地配置可能指向办公网端点，Pod 不可达）
+  applyCloudModelSettings(settings);
   await fs.mkdir(home, { recursive: true });
   await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
 }
@@ -161,8 +172,9 @@ export async function rewriteRoute(
   } catch {
     // 首次绑定：新建路由表
   }
-  // 删除旧的两段式路由（channelName:chatId）
+  // 改写既有条目只换 sessionId，保留真实 target（senderId 等）；其他群路由不动
   const oldKey = `${botName}:${chatId}`;
+  const prev = routes[oldKey] as { target?: unknown } | undefined;
   delete routes[oldKey];
 
   // 从 observed-contacts.json 获取群内已知用户，写三段式路由（channelName:senderId:chatId）
@@ -181,7 +193,7 @@ export async function rewriteRoute(
     // 无用户记录时用两段式兼容
     routes[oldKey] = {
       sessionId,
-      target: { channelName: botName, senderId: '-', chatId, isGroup: true },
+      target: prev?.target ?? { channelName: botName, senderId: '-', chatId, isGroup: true },
       cwd,
     };
   }

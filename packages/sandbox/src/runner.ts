@@ -21,6 +21,7 @@ import {
   rewriteRoute,
   unpackInput,
   uploadTo,
+  writeCloudModelConfig,
 } from './context.js';
 import type { HandoffManifest } from '@agenthub/shared';
 
@@ -183,6 +184,8 @@ export function buildRunner(): FastifyInstance {
         }
 
         // web 模式：先执行任务接力（如有），完成后拉起 serve 供继续对话
+        // 覆盖还原的本地模型配置（可能指向办公网端点，Pod 不可达）
+        await writeCloudModelConfig(qwenHome());
         if (body.task) {
           const code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
           state.taskDone = true;

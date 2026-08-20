@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { listChats, rewriteRoute, routesPath, writeChannelsConfig } from './context.js';
+import { listChats, rewriteRoute, routesPath, writeChannelsConfig, writeCloudModelConfig } from './context.js';
 
 let home: string;
 
@@ -34,13 +34,23 @@ describe('writeChannelsConfig', () => {
       groups: { '*': { requireMention: true } },
       useConnectionManager: true,
     });
-    // qwen serve 需要 model / modelProviders / security / env 才能用正确的端点和 key
+    // qwen serve 需要 model / modelProviders / security，且必须无条件覆盖还原的本地模型配置
     expect(settings.model).toEqual({ name: '$OPENAI_MODEL', baseUrl: '$OPENAI_BASE_URL' });
     expect(settings.modelProviders.openai[0]).toMatchObject({
-      envKey: 'DASHSCOPE_API_KEY',
+      envKey: 'OPENAI_API_KEY',
+      baseUrl: '$OPENAI_BASE_URL',
     });
     expect(settings.security).toEqual({ auth: { selectedType: 'openai' } });
-    expect(settings.env.DASHSCOPE_API_KEY).toBe('$DASHSCOPE_API_KEY');
+  });
+
+  it('还原的本地模型配置（办公网端点）被无条件覆盖', async () => {
+    await fs.writeFile(
+      join(home, 'settings.json'),
+      JSON.stringify({ model: { name: 'local', baseUrl: 'https://idealab.alibaba-inc.com/api/openai/v1' } }),
+    );
+    await writeChannelsConfig(home, 'mybot', '/w');
+    const settings = JSON.parse(await fs.readFile(join(home, 'settings.json'), 'utf8'));
+    expect(settings.model).toEqual({ name: '$OPENAI_MODEL', baseUrl: '$OPENAI_BASE_URL' });
   });
 
   it('合并进既有 settings.json，不覆盖其他字段', async () => {
@@ -50,6 +60,25 @@ describe('writeChannelsConfig', () => {
     expect(settings.theme).toBe('dark');
     expect(settings.channels.other.type).toBe('feishu');
     expect(settings.channels.mybot.type).toBe('dingtalk');
+  });
+});
+
+describe('writeCloudModelConfig（web 模式模型覆盖）', () => {
+  it('仅覆盖模型配置，其余本地设置保持不动', async () => {
+    await fs.writeFile(
+      join(home, 'settings.json'),
+      JSON.stringify({
+        theme: 'dark',
+        model: { name: 'local', baseUrl: 'https://idealab.alibaba-inc.com/api/openai/v1' },
+        modelProviders: { openai: [{ id: 'local', envKey: 'LOCAL_KEY' }] },
+      }),
+    );
+    await writeCloudModelConfig(home);
+    const s = JSON.parse(await fs.readFile(join(home, 'settings.json'), 'utf8'));
+    expect(s.theme).toBe('dark');
+    expect(s.model).toEqual({ name: '$OPENAI_MODEL', baseUrl: '$OPENAI_BASE_URL' });
+    expect(s.modelProviders.openai[0].envKey).toBe('OPENAI_API_KEY');
+    expect(s.security).toEqual({ auth: { selectedType: 'openai' } });
   });
 });
 
