@@ -112,3 +112,113 @@ export function setUserModelConfig(
     uid,
   );
 }
+
+// ── sandbox 实例历史（S5）──────────────────────────────────
+// 不变量：所有更新只作用于「当前开着的那一行」（status IN provisioning/running），
+// 因为 bot pod 名会在重建时复用；从未 ready 的实例 duration_seconds 保持 NULL。
+export type SandboxKind = 'web' | 'bot';
+export type SandboxStatus = 'provisioning' | 'running' | 'reclaimed' | 'failed' | 'lost';
+export type ReclaimReason =
+  | 'task-done'
+  | 'task-failed'
+  | 'expired'
+  | 'cancelled'
+  | 'pod-failed'
+  | 'load-failed'
+  | 'pod-lost'
+  | 'bot-deleted'
+  | 'orphan'
+  | 'crash-recover';
+
+export interface SandboxRow {
+  id: number;
+  pod_name: string;
+  user_id: number;
+  kind: SandboxKind;
+  handoff_id: string | null;
+  bot_id: number | null;
+  image: string;
+  namespace: string;
+  status: SandboxStatus;
+  created_at: string;
+  ready_at: string | null;
+  ended_at: string | null;
+  duration_seconds: number | null;
+  reclaim_reason: ReclaimReason | null;
+  last_error: string | null;
+}
+
+export function recordSandboxCreate(
+  db: DB,
+  s: { podName: string; userId: number; kind: SandboxKind; image: string; namespace: string; handoffId?: string | null; botId?: number | null },
+): void {
+  db
+    .prepare(
+      `INSERT INTO sandboxes (pod_name, user_id, kind, handoff_id, bot_id, image, namespace, status, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+    )
+    .run(s.podName, s.userId, s.kind, s.handoffId ?? null, s.botId ?? null, s.image, s.namespace, 'provisioning', nowIso());
+}
+
+export function recordSandboxReady(db: DB, podName: string): void {
+  db.prepare("UPDATE sandboxes SET status='running', ready_at=? WHERE pod_name=? AND status='provisioning'").run(nowIso(), podName);
+}
+
+/** reason → 终态映射（S6） */
+export const reclaimStatus = (reason: ReclaimReason): SandboxStatus =>
+  reason === 'pod-failed' || reason === 'load-failed' || reason === 'task-failed'
+    ? 'failed'
+    : reason === 'pod-lost' || reason === 'crash-recover'
+      ? 'lost'
+      : 'reclaimed';
+
+export function recordSandboxReclaim(
+  db: DB,
+  podName: string,
+  status: SandboxStatus,
+  reason: ReclaimReason,
+  lastError?: string,
+): void {
+  const at = nowIso();
+  db.prepare(
+    `UPDATE sandboxes SET status=?, reclaim_reason=?, ended_at=?, last_error=COALESCE(?, last_error),
+       duration_seconds = CASE WHEN ready_at IS NOT NULL
+         THEN CAST(ROUND((julianday(?) - julianday(ready_at)) * 86400) AS INTEGER) ELSE NULL END
+     WHERE pod_name=? AND status IN ('provisioning','running')`,
+  ).run(status, reason, at, lastError ?? null, at, podName);
+}
+
+/** 重启对账收养（S8）：保留 Pod 真实启动时间，不把已跑半小时的 Pod 报成刚创建 */
+export function adoptSandbox(
+  db: DB,
+  s: {
+    podName: string;
+    userId: number;
+    kind: SandboxKind;
+    image: string;
+    namespace: string;
+    handoffId?: string | null;
+    botId?: number | null;
+    startedAt?: string;
+    running: boolean;
+  },
+): void {
+  const created = s.startedAt ?? nowIso();
+  db
+    .prepare(
+      `INSERT INTO sandboxes (pod_name, user_id, kind, handoff_id, bot_id, image, namespace, status, created_at, ready_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    )
+    .run(
+      s.podName,
+      s.userId,
+      s.kind,
+      s.handoffId ?? null,
+      s.botId ?? null,
+      s.image,
+      s.namespace,
+      s.running ? 'running' : 'provisioning',
+      created,
+      s.running ? created : null,
+    );
+}

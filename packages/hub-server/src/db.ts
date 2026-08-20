@@ -1,11 +1,13 @@
 /**
  * SQLite 建表与访问（spec §3.8）。hub-server 独占数据库，其他包不直接碰库。
+ * 迁移机制（S2）：PRAGMA user_version 门控 + 事务化推进 + 拒绝降级；
+ * 新迁移追加到 MIGRATIONS 末尾，已发布条目不改。
  */
 import Database from 'better-sqlite3';
 
 export type DB = Database.Database;
 
-const DDL = `
+const BASELINE_DDL = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
   username TEXT UNIQUE NOT NULL,
@@ -63,22 +65,55 @@ CREATE INDEX IF NOT EXISTS idx_handoffs_user ON handoffs(user_id, created_at DES
 CREATE INDEX IF NOT EXISTS idx_events_handoff ON handoff_events(handoff_id, id);
 `;
 
+/** sandbox 实例历史（S5）：执行时长按 ready_at→ended_at 计；故意不加 FK，历史行要比 handoff 活得久 */
+const SANDBOXES_DDL = `
+CREATE TABLE IF NOT EXISTS sandboxes (
+  id INTEGER PRIMARY KEY,
+  pod_name TEXT NOT NULL, user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,                 -- web | bot
+  handoff_id TEXT, bot_id INTEGER,    -- 故意不加 FK
+  image TEXT NOT NULL, namespace TEXT NOT NULL,
+  status TEXT NOT NULL,               -- provisioning|running|reclaimed|failed|lost
+  created_at TEXT NOT NULL, ready_at TEXT, ended_at TEXT,
+  duration_seconds INTEGER, reclaim_reason TEXT, last_error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sandboxes_user ON sandboxes(user_id, created_at DESC);
+`;
+
 /** per-user 模型凭证 Secret 名 */
 export const userModelSecret = (uid: number) => `user-${uid}-model`;
 
-/** 迁移：users 表追加模型凭证列（幂等） */
-function migrate(db: DB): void {
-  const cols = (db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((c) => c.name);
-  if (!cols.includes('model_api_key_enc')) db.exec('ALTER TABLE users ADD COLUMN model_api_key_enc TEXT');
-  if (!cols.includes('model_base_url')) db.exec('ALTER TABLE users ADD COLUMN model_base_url TEXT');
-  if (!cols.includes('model_name')) db.exec('ALTER TABLE users ADD COLUMN model_name TEXT');
+export const MIGRATIONS: Array<(db: DB) => void> = [
+  // 1：基线表。IF NOT EXISTS 保证迁移机制上线前的旧库跑本条为 no-op
+  (db) => db.exec(BASELINE_DDL),
+  // 2：users 表追加模型凭证列（幂等）
+  (db) => {
+    const cols = (db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((c) => c.name);
+    if (!cols.includes('model_api_key_enc')) db.exec('ALTER TABLE users ADD COLUMN model_api_key_enc TEXT');
+    if (!cols.includes('model_base_url')) db.exec('ALTER TABLE users ADD COLUMN model_base_url TEXT');
+    if (!cols.includes('model_name')) db.exec('ALTER TABLE users ADD COLUMN model_name TEXT');
+  },
+  // 3：sandboxes 历史表（S5）
+  (db) => db.exec(SANDBOXES_DDL),
+];
+
+export function migrate(db: DB): void {
+  const current = db.pragma('user_version', { simple: true }) as number;
+  if (current > MIGRATIONS.length) {
+    throw new Error(`db user_version=${current} 高于本进程已知版本 ${MIGRATIONS.length}，拒绝降级运行`);
+  }
+  for (let v = current; v < MIGRATIONS.length; v++) {
+    db.transaction(() => {
+      MIGRATIONS[v]!(db);
+      db.pragma(`user_version = ${v + 1}`);
+    })();
+  }
 }
 
 export function openDb(path: string): DB {
   const db = new Database(path);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  db.exec(DDL);
   migrate(db);
   return db;
 }
