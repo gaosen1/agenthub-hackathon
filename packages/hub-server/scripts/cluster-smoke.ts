@@ -57,9 +57,17 @@ async function main(): Promise<void> {
   if (!res.ok) throw new Error(`unexpected status ${res.status}`);
 
   await connector.dispose({ namespace: NS, podName: POD });
-  const pods = await orch.listSandboxPodNames();
+  const pods = (await orch.listSandboxPods()).map((p) => p.name);
   console.log('sandbox pods:', pods);
   await orch.deletePod(POD);
+  // 收尾确认无残留（spec §D6）：deletePod 有宽限期，轮询等 Terminating 消失
+  const cleanupDeadline = Date.now() + 30_000;
+  for (;;) {
+    const left = (await orch.listSandboxPods()).map((p) => p.name).filter((n) => n === POD);
+    if (left.length === 0) break;
+    if (Date.now() > cleanupDeadline) throw new Error(`残留 Pod: ${left.join(',')}`);
+    await new Promise((r) => setTimeout(r, 2000));
+  }
   console.log('deleted. smoke OK ✅');
   process.exit(0);
 }

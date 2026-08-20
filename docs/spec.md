@@ -538,3 +538,39 @@ spec:
 - [ ] 性能中位数：push ≤ 30s、冷启动 ≤ 60s、pull ≤ 10s
 - [ ] Hub 在集群内运行（DirectConnector）下 CP-2/CP-3 关键用例复验通过
 - [ ] 成本：演示结束后 `kubectl get pods -n agenthub` 除保留 bot 外无残留；OSS 临时对象有过期规则
+
+---
+
+## 附录 A：管理面板（S2–S23，个人工具阶段补齐）
+
+### A.1 新增路由
+
+| 路由 | 说明 |
+|---|---|
+| `GET /api/sandboxes?windowHours=1..720` | Sandbox 历史行 + 模板 + 真实策略；恒带 `WHERE user_id` |
+| `GET /api/oss[?refresh=1]` | OSS 镜像纯 SQL 出数据；`refresh=1` 才真 list 对账并标 expired |
+| `POST /api/oss/sign` | 签名下载；`assertOwnedKey` 先校验归属（他人/穿越 → 403） |
+| `GET/PATCH /api/settings` | per-user 设置；webhook 加密落库，响应仅回掩码 |
+| `POST /api/settings/token` | token 轮换（token_version+1），旧 token 即刻 401 |
+| `POST /api/settings/webhook/test` | webhook 连通性真实测试，成败直给 |
+
+### A.2 新增表/列
+
+- `sandboxes`：实例历史（provisioning/running/reclaimed/failed/lost；duration=ready→ended；无 FK）
+- `user_settings(user_id,key,value,updated_at)`：PK(user_id,key)，per-key upsert
+- `users.token_version`：S17 轮换真失效
+- `handoffs.{input,output}_size / {input,output}_uploaded_at / {input,output}_expired`：OSS 元数据镜像
+
+### A.3 迁移机制
+
+`PRAGMA user_version` 门控 + `MIGRATIONS[]` 事务化推进 + 版本高于进程已知时拒绝运行（不静默降级）。
+
+### A.4 通知器（S18）
+
+`Notifier` 由 `Worker.tick()` 第 5 步单点驱动；扫 `handoff_events kind='status'` 游标推进，
+at-least-once；游标存 `user_settings.notifyCursor`；仅当 webhook 已配且 `notifyStatusChange=1` 时发送。
+
+### A.5 CLI 设置消费（S20/S21）
+
+`agenthub config set/get/list`；push/pull 拉 `GET /api/settings`：
+优先级 = 显式 flag > 本地 config > 服务端 > 缺省。离线回退本地。
