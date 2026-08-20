@@ -403,3 +403,18 @@ deploy/         # K8s manifests + 镜像构建推送脚本
 | bot sandbox | 绑定用户钉钉机器人的常驻 Pod，qwen serve --channel 托管，多群多 session |
 | chat_thread 路由 | SessionRouter 按 `<botName>:<chatId>` 路由：同群共享、跨群隔离 |
 | SandboxConnector | Hub 访问 Pod 的网络抽象：开发期 port-forward，上云后直连 Pod IP |
+
+## 附录 B：管理面板架构（S2–S23）
+
+- **迁移机制**：`db.ts` 的 `MIGRATIONS[]` + `PRAGMA user_version` 门控，事务化推进，高版本拒绝运行；新迁移只追加。
+- **Sandbox 面板**：`sandboxes` 历史表独立于 `handoffs`（bot pod 一对多、时长按 ready→ended）；
+  `Worker` 生命周期写入点唯一咽喉 `safeDeletePod(h, reason)`；启动 `reconcileSandboxes()` 双向对账。
+- **OSS 面板**：镜像到 SQLite（`*_size/*_uploaded_at/*_expired` 列），GET 纯 SQL；`?refresh=1` 才真 list 对账；
+  `assertOwnedKey` 保证签名不越权；未配置时 `NullOssClient` 降级（启动不崩、面板渲染未配置态）。
+- **设置面板**：`user_settings` per-key upsert；webhook 用 `encryptSecret` 落库、响应仅掩码；
+  token 轮换靠 `users.token_version`，`requireAuth` 比对 JWT `tv`，无兜底。
+- **通知器**：`Notifier` 事件驱动（`handoff_events kind='status'`），游标持久化，at-least-once，
+  `Worker.tick()` 第 5 步单点调用，不污染 `setStatus` 纯写路径。
+- **CLI 设置消费**：优先级 显式 flag > 本地 config > 服务端 `GET /api/settings` > 缺省；离线回退本地。
+- **UI 设计系统**：`design-system/agenthub/MASTER.md`（ui-ux-pro-max 产出）——反 AI 味红线、
+  `--n-*` 令牌、等宽数据列、空态一等公民；存量页面已按 t20 迁入。
