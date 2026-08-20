@@ -7,6 +7,22 @@ import type { RunnerMode } from '@agenthub/shared';
 
 export type PodPhase = 'pending' | 'ready' | 'failed' | 'gone';
 
+/** 存活 Pod 的摘要信息（S7）；startedAt 可选：ACS virtual-kubelet 可能不给 startTime */
+export interface SandboxPodInfo {
+  name: string;
+  phase: PodPhase;
+  startedAt?: string;
+  labels: Record<string, string>;
+}
+
+/** Pod 相位判定纯函数（S7）：getPodPhase 与 listSandboxPods 共用一个真相 */
+export function phaseOf(pod: k8s.V1Pod): PodPhase {
+  const phase = pod.status?.phase;
+  if (phase === 'Failed' || phase === 'Succeeded') return 'failed';
+  const ready = pod.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
+  return ready ? 'ready' : 'pending';
+}
+
 export interface SandboxPodSpec {
   podName: string;
   mode: RunnerMode;
@@ -20,7 +36,7 @@ export interface PodOrchestrator {
   createPod(spec: SandboxPodSpec): Promise<void>;
   deletePod(podName: string): Promise<void>;
   getPodPhase(podName: string): Promise<PodPhase>;
-  listSandboxPodNames(): Promise<string[]>;
+  listSandboxPods(): Promise<SandboxPodInfo[]>;
   createSecret(name: string, data: Record<string, string>): Promise<void>;
   deleteSecret(name: string): Promise<void>;
   /** bot 模式：创建 Deployment（自动重建 Pod），存储 deployment 名为 pod_name */
@@ -43,6 +59,21 @@ export interface K8sConfig {
 }
 
 export const SANDBOX_LABEL = 'app=agenthub-sandbox';
+
+/** 默认沙箱镜像（SANDBOX_IMAGE 环境变量可覆盖） */
+export const DEFAULT_SANDBOX_IMAGE = '<YOUR_ACR_REGISTRY>/agenthub-demo/sandbox:dev';
+export const sandboxImage = () => process.env.SANDBOX_IMAGE ?? DEFAULT_SANDBOX_IMAGE;
+
+/** Pod 资源规格：createPod/createDeployment 与面板模板（S9）共用，不漂移 */
+export const SANDBOX_RESOURCES = { cpu: '2', memory: '4Gi' };
+export const SANDBOX_PORTS = { runner: 8080, serve: 8081 };
+
+/** 镜像元数据登记：事实源头是 packages/sandbox/Dockerfile，改 Dockerfile 要同步改 */
+export const SANDBOX_TEMPLATE = {
+  baseImage: 'node:22-slim',
+  qwenVersion: '0.20.1',
+  toolchain: ['git', 'ripgrep', 'tar', 'procps'],
+};
 
 export function loadKube(): k8s.KubeConfig {
   const kc = new k8s.KubeConfig();
@@ -84,15 +115,15 @@ export class K8sOrchestrator implements PodOrchestrator {
             name: 'sandbox',
             image: this.cfg.image,
             imagePullPolicy: 'IfNotPresent',
-            ports: [{ containerPort: 8080 }, { containerPort: 8081 }],
+            ports: [{ containerPort: SANDBOX_PORTS.runner }, { containerPort: SANDBOX_PORTS.serve }],
             env: Object.entries({ RUNNER_MODE: spec.mode, ...spec.env }).map(([name, value]) => ({ name, value })),
             envFrom: spec.secretRefs.map((name) => ({ secretRef: { name, optional: true } })),
             resources: {
-              requests: { cpu: '2', memory: '4Gi' },
-              limits: { cpu: '2', memory: '4Gi' },
+              requests: { ...SANDBOX_RESOURCES },
+              limits: { ...SANDBOX_RESOURCES },
             },
             readinessProbe: {
-              httpGet: { path: '/healthz', port: 8080 },
+              httpGet: { path: '/healthz', port: SANDBOX_PORTS.runner },
               initialDelaySeconds: 2,
               periodSeconds: 3,
             },
@@ -119,15 +150,20 @@ export class K8sOrchestrator implements PodOrchestrator {
       if (isNotFound(e)) return 'gone';
       throw e;
     }
-    const phase = pod.status?.phase;
-    if (phase === 'Failed' || phase === 'Succeeded') return 'failed';
-    const ready = pod.status?.conditions?.some((c) => c.type === 'Ready' && c.status === 'True');
-    return ready ? 'ready' : 'pending';
+    const phase = phaseOf(pod);
+    return phase;
   }
 
-  async listSandboxPodNames(): Promise<string[]> {
+  async listSandboxPods(): Promise<SandboxPodInfo[]> {
     const res = await withRetry(() => this.core.listNamespacedPod({ namespace: this.cfg.namespace, labelSelector: SANDBOX_LABEL }));
-    return res.items.map((p) => p.metadata?.name ?? '').filter(Boolean);
+    return res.items
+      .map((p) => ({
+        name: p.metadata?.name ?? '',
+        phase: phaseOf(p),
+        ...(p.status?.startTime ? { startedAt: new Date(p.status.startTime).toISOString() } : {}),
+        labels: p.metadata?.labels ?? {},
+      }))
+      .filter((i) => i.name);
   }
 
   /** bot 模式：创建 Deployment（ACS 驱逐后自动重建 Pod） */
@@ -158,16 +194,16 @@ export class K8sOrchestrator implements PodOrchestrator {
                 name: 'sandbox',
                 image: this.cfg.image,
                 imagePullPolicy: 'IfNotPresent',
-                ports: [{ containerPort: 8080 }, { containerPort: 8081 }],
+                ports: [{ containerPort: SANDBOX_PORTS.runner }, { containerPort: SANDBOX_PORTS.serve }],
                 ...(overlay ? { command: overlay.command, args: overlay.args, volumeMounts: overlay.volumeMounts } : {}),
                 env: Object.entries({ RUNNER_MODE: spec.mode, ...spec.env }).map(([name, value]) => ({ name, value })),
                 envFrom: spec.secretRefs.map((name) => ({ secretRef: { name, optional: true } })),
                 resources: {
-                  requests: { cpu: '2', memory: '4Gi' },
-                  limits: { cpu: '2', memory: '4Gi' },
+                  requests: { ...SANDBOX_RESOURCES },
+                  limits: { ...SANDBOX_RESOURCES },
                 },
                 readinessProbe: {
-                  httpGet: { path: '/healthz', port: 8080 },
+                  httpGet: { path: '/healthz', port: SANDBOX_PORTS.runner },
                   initialDelaySeconds: 2,
                   periodSeconds: 3,
                 },

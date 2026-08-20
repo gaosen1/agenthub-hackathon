@@ -4,14 +4,15 @@
  * 另含：崩溃恢复扫描、孤儿 Pod 清理、空闲 TTL 与硬超时。
  */
 import { randomBytes } from 'node:crypto';
-import type { HandoffStatus } from '@agenthub/shared';
+import type { HandoffStatus, SandboxPolicy } from '@agenthub/shared';
 import type { DB } from './db.js';
 import type { OssSigner } from './oss.js';
 import { ossKeyOf } from './oss.js';
-import type { PodOrchestrator, PodPhase } from './k8s.js';
+import { sandboxImage, type PodOrchestrator, type PodPhase, type SandboxPodInfo } from './k8s.js';
 import type { PodRef, SandboxConnector } from './connector.js';
 import { RunnerClient } from './runner-client.js';
 import {
+  adoptSandbox,
   getBot,
   getHandoff,
   getUserModelConfig,
@@ -19,9 +20,15 @@ import {
   nowIso,
   patchHandoff,
   recordEvent,
+  recordSandboxCreate,
+  recordSandboxReady,
+  recordSandboxReclaim,
+  reclaimStatus,
   setStatus,
   statusEnteredAt,
   type HandoffRow,
+  type ReclaimReason,
+  type SandboxRow,
 } from './store.js';
 import { userModelSecret } from './db.js';
 import { decryptSecret } from './crypto.js';
@@ -31,7 +38,12 @@ export interface WorkerConfig {
   /** 交互 sandbox 空闲 TTL（分钟），默认 120 */
   idleTtlMinutes?: number;
   webBaseUrl?: string;
+  /** 建 Pod 镜像（缺省 SANDBOX_IMAGE / 默认镜像），仅用于历史行展示 */
+  image?: string;
 }
+
+export const DEFAULT_WORKER_INTERVAL_MS = 5000;
+export const DEFAULT_ORPHAN_INTERVAL_MS = 600_000;
 
 const token = () => randomBytes(24).toString('base64url');
 
@@ -39,6 +51,8 @@ export class Worker {
   private timer?: NodeJS.Timeout;
   private orphanTimer?: NodeJS.Timeout;
   private ticking = false;
+  private workerIntervalMs = DEFAULT_WORKER_INTERVAL_MS;
+  private orphanIntervalMs = DEFAULT_ORPHAN_INTERVAL_MS;
   /** runner 日志搬运游标（handoffId → nextAfter） */
   private readonly logCursors = new Map<string, number>();
 
@@ -51,7 +65,9 @@ export class Worker {
     private readonly secret: string,
   ) {}
 
-  start(intervalMs = 5000, orphanIntervalMs = 600_000): void {
+  start(intervalMs = DEFAULT_WORKER_INTERVAL_MS, orphanIntervalMs = DEFAULT_ORPHAN_INTERVAL_MS): void {
+    this.workerIntervalMs = intervalMs;
+    this.orphanIntervalMs = orphanIntervalMs;
     this.timer = setInterval(() => void this.tick().catch(() => undefined), intervalMs);
     this.timer.unref?.();
     this.orphanTimer = setInterval(() => void this.cleanupOrphans().catch(() => undefined), orphanIntervalMs);
@@ -65,6 +81,21 @@ export class Worker {
 
   private podRef(podName: string): PodRef {
     return { namespace: this.cfg.namespace, podName };
+  }
+
+  private get image(): string {
+    return this.cfg.image ?? sandboxImage();
+  }
+
+  /** 面板策略卡（S9）：真实配置，不是前端重述文案 */
+  policy(): SandboxPolicy {
+    return {
+      defaultTimeoutMinutes: 30,
+      idleTtlMinutes: this.cfg.idleTtlMinutes ?? 120,
+      taskLingerMinutes: Number(process.env.TASK_LINGER_MINUTES ?? 30),
+      orphanIntervalMs: this.orphanIntervalMs,
+      workerIntervalMs: this.workerIntervalMs,
+    };
   }
 
   private async runnerOf(h: Pick<HandoffRow, 'kind' | 'bot_id' | 'pod_name' | 'runner_token'>): Promise<RunnerClient> {
@@ -124,20 +155,29 @@ export class Worker {
   // queued → provisioning：web 建新 Pod；bot 复用常驻 Pod
   private async handleQueued(): Promise<void> {
     for (const h of listByStatus(this.db, 'queued')) {
-      try {
-        if (h.kind === 'bot') {
-          const bot = h.bot_id ? getBot(this.db, h.bot_id) : undefined;
-          if (!bot?.pod_name) {
-            setStatus(this.db, h, 'failed', 'bot sandbox not available');
-            continue;
-          }
-          patchHandoff(this.db, h.id, { pod_name: bot.pod_name, runner_token: bot.runner_token });
-          setStatus(this.db, h, 'provisioning');
+      if (h.kind === 'bot') {
+        const bot = h.bot_id ? getBot(this.db, h.bot_id) : undefined;
+        if (!bot?.pod_name) {
+          setStatus(this.db, h, 'failed', 'bot sandbox not available');
           continue;
         }
-        const podName = `ah-web-${h.id.slice(3)}`;
-        const serveToken = token();
-        const runnerToken = token();
+        patchHandoff(this.db, h.id, { pod_name: bot.pod_name, runner_token: bot.runner_token });
+        setStatus(this.db, h, 'provisioning');
+        continue;
+      }
+      const podName = `ah-web-${h.id.slice(3)}`;
+      const serveToken = token();
+      const runnerToken = token();
+      // 先落历史行再建 Pod：建不出来的实例也要在面板上看得见（S6）
+      recordSandboxCreate(this.db, {
+        podName,
+        userId: h.user_id,
+        kind: 'web',
+        image: this.image,
+        namespace: this.cfg.namespace,
+        handoffId: h.id,
+      });
+      try {
         const modelRefs = await this.ensureModelSecret(h.user_id);
         await this.orchestrator.createPod({
           podName,
@@ -153,6 +193,7 @@ export class Worker {
         patchHandoff(this.db, h.id, { pod_name: podName, serve_token: serveToken, runner_token: runnerToken });
         setStatus(this.db, h, 'provisioning');
       } catch (e) {
+        recordSandboxReclaim(this.db, podName, 'failed', 'pod-failed', `provision failed: ${msg(e)}`);
         setStatus(this.db, h, 'failed', `provision failed: ${msg(e)}`);
       }
     }
@@ -166,7 +207,7 @@ export class Worker {
         if (phase === 'pending') continue;
         if (phase === 'failed' || phase === 'gone') {
           setStatus(this.db, h, 'failed', `pod ${phase}`);
-          await this.safeDeletePod(h);
+          await this.safeDeletePod(h, 'pod-failed');
           continue;
         }
         const runner = await this.runnerOf(h);
@@ -182,10 +223,11 @@ export class Worker {
         }
         patchHandoff(this.db, h.id, { last_active_at: nowIso() });
         setStatus(this.db, h, 'running');
+        recordSandboxReady(this.db, h.pod_name!);
         recordEvent(this.db, h.id, 'log', JSON.stringify({ t: nowIso(), tag: 'sys', c: 'sandbox loaded, agent running' }));
       } catch (e) {
         setStatus(this.db, h, 'failed', `load failed: ${msg(e)}`);
-        await this.safeDeletePod(h);
+        await this.safeDeletePod(h, 'load-failed');
       }
     }
   }
@@ -237,7 +279,7 @@ export class Worker {
         const phase = await this.resolvePodPhase(h).catch(() => 'gone' as const);
         if (phase === 'gone' || phase === 'failed') {
           setStatus(this.db, h, 'failed', 'sandbox pod lost');
-          await this.safeDeletePod(h);
+          await this.safeDeletePod(h, 'pod-lost');
         }
       }
     }
@@ -264,7 +306,7 @@ export class Worker {
         setStatus(this.db, h, 'failed', `snapshot failed: ${msg(e)}`);
       } finally {
         this.logCursors.delete(h.id);
-        if (h.kind === 'web') await this.safeDeletePod(h);
+        if (h.kind === 'web') await this.safeDeletePod(h, reasonOfTarget(target));
         else if (h.bot_id) this.db.prepare('UPDATE bots SET current_handoff_id=NULL WHERE id=? AND current_handoff_id=?').run(h.bot_id, h.id);
       }
     }
@@ -278,8 +320,9 @@ export class Worker {
     return true;
   }
 
-  /** 崩溃恢复：启动时扫描执行态任务，不可达则 failed 并回收 */
+  /** 崩溃恢复：启动时先对账 sandbox 历史（S8），再扫描执行态任务，不可达则 failed 并回收 */
   async recover(): Promise<void> {
+    await this.reconcileSandboxes();
     for (const status of ['provisioning', 'running', 'packaging'] as const) {
       for (const h of listByStatus(this.db, status)) {
         if (!h.pod_name) {
@@ -289,16 +332,51 @@ export class Worker {
         const phase = await this.resolvePodPhase(h).catch(() => 'gone' as const);
         if (phase === 'gone' || phase === 'failed') {
           setStatus(this.db, h, 'failed', 'recovered: pod lost');
-          await this.safeDeletePod(h);
+          await this.safeDeletePod(h, 'crash-recover');
         }
         // ready/pending 的留给正常 tick 继续推进
       }
     }
   }
 
+  /** 重启对账（S8）：开着的行但 Pod 没了 → lost；Pod 活着但没有开着的行 → 按标签收养。集群不可达静默返回 */
+  async reconcileSandboxes(): Promise<void> {
+    let pods: SandboxPodInfo[];
+    try {
+      pods = await this.orchestrator.listSandboxPods();
+    } catch {
+      return;
+    }
+    const alive = new Map(pods.map((p) => [p.name, p]));
+    for (const row of this.db.prepare("SELECT * FROM sandboxes WHERE status IN ('provisioning','running')").all() as SandboxRow[]) {
+      if (!alive.has(row.pod_name)) recordSandboxReclaim(this.db, row.pod_name, 'lost', 'crash-recover');
+    }
+    for (const p of pods) {
+      const owner = Number(p.labels['agenthub/owner']);
+      // 不凭空编造归属：owner 标签缺失或非正整数跳过，交给孤儿清理
+      if (!Number.isInteger(owner) || owner <= 0) continue;
+      const open = this.db
+        .prepare("SELECT 1 FROM sandboxes WHERE pod_name=? AND status IN ('provisioning','running')")
+        .get(p.name);
+      if (open) continue;
+      const botRaw = p.labels['agenthub/bot'];
+      adoptSandbox(this.db, {
+        podName: p.name,
+        userId: owner,
+        kind: p.labels['agenthub/kind'] === 'bot' ? 'bot' : 'web',
+        image: this.image,
+        namespace: this.cfg.namespace,
+        handoffId: p.labels['agenthub/handoff'] ?? null,
+        botId: botRaw !== undefined && Number.isInteger(Number(botRaw)) ? Number(botRaw) : null,
+        startedAt: p.startedAt,
+        running: p.phase === 'ready',
+      });
+    }
+  }
+
   /** 孤儿 Pod 清理：带 sandbox 标签但无活跃 handoff/bot 引用的一律删除 */
   async cleanupOrphans(): Promise<void> {
-    const pods = await this.orchestrator.listSandboxPodNames();
+    const pods = (await this.orchestrator.listSandboxPods()).map((p) => p.name);
     const active = new Set<string>();
     for (const row of this.db
       .prepare("SELECT pod_name FROM handoffs WHERE pod_name IS NOT NULL AND status IN ('provisioning','running','packaging')")
@@ -317,11 +395,17 @@ export class Worker {
     }
   }
 
-  private async safeDeletePod(h: HandoffRow): Promise<void> {
+  /** web pod 回收的唯一咽喉点（S6）：reason 必传，在这里写 ended_at + duration_seconds */
+  private async safeDeletePod(h: HandoffRow, reason: ReclaimReason): Promise<void> {
     if (h.kind !== 'web' || !h.pod_name) return;
     await this.connector.dispose(this.podRef(h.pod_name)).catch(() => undefined);
     await this.orchestrator.deletePod(h.pod_name).catch(() => undefined);
+    recordSandboxReclaim(this.db, h.pod_name, reclaimStatus(reason), reason, h.error ?? undefined);
   }
 }
+
+/** 终态 target → 回收原因（S6） */
+const reasonOfTarget = (target: HandoffStatus): ReclaimReason =>
+  target === 'failed' ? 'task-failed' : target === 'expired' ? 'expired' : target === 'cancelled' ? 'cancelled' : 'task-done';
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
