@@ -310,15 +310,21 @@ body{
   .chat{display:none}
 }
 @media (max-width: 760px){
+  .app{grid-template-rows:auto 1fr}
+  .topbar{flex-wrap:wrap;height:auto;min-height:56px;padding:8px 12px;row-gap:6px}
+  .topbar .nav{margin-left:0}
+  .topbar .nav a{padding:6px 8px;font-size:12px}
   .main{grid-template-columns:1fr}
+  .main > *{min-width:0}
   .sidebar{max-height:42vh;border-right:none;border-bottom:1px solid var(--line)}
+  .detail{min-width:0}
+  .d-head{flex-wrap:wrap}
+  .d-actions{margin-left:0}
   .grid4{grid-template-columns:repeat(2,1fr)}
   .view-inner{padding:18px 16px 48px}
   .detail-inner{padding:16px 14px 48px}
   .form-row{flex-direction:column;align-items:flex-start;gap:8px}
   .form-row .fl{width:auto}
-  .topbar{gap:8px;padding:0 12px}
-  .topbar .nav{margin-left:0}
 }
 
 /* ---------- 顶栏导航 ---------- */
