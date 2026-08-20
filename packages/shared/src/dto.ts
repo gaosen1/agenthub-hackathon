@@ -273,3 +273,30 @@ export type OssListResp = z.infer<typeof OssListRespSchema>;
 
 export const OssSignReqSchema = z.object({ key: z.string().min(1) });
 export type OssSignReq = z.infer<typeof OssSignReqSchema>;
+
+// ---------- 设置面板（S16/S17） ----------
+
+export const PatchSettingsReqSchema = z.object({
+  notifyStatusChange: z.boolean().optional(),
+  notifyChatSync: z.boolean().optional(),
+  /** 钉钉 webhook 明文；服务端加密落库，响应永不回明文 */
+  webhook: z.string().nullable().optional(),
+});
+export type PatchSettingsReq = z.infer<typeof PatchSettingsReqSchema>;
+
+export const SettingsRespSchema = z.object({
+  settings: z.object({
+    notifyStatusChange: z.boolean(),
+    notifyChatSync: z.boolean(),
+    webhook: z.object({ configured: z.boolean(), masked: z.string().nullable() }),
+  }),
+  server: z.object({
+    hubUrl: z.string().nullable(),
+    ossBucket: z.string().nullable(),
+    ossRegion: z.string().nullable(),
+    signedUrlTtlSeconds: z.number(),
+    sandboxImage: z.string(),
+    idleTtlMinutes: z.number(),
+  }),
+});
+export type SettingsResp = z.infer<typeof SettingsRespSchema>;

@@ -105,6 +105,18 @@ export const MIGRATIONS: Array<(db: DB) => void> = [
     if (!cols.includes('input_expired')) db.exec('ALTER TABLE handoffs ADD COLUMN input_expired INTEGER NOT NULL DEFAULT 0');
     if (!cols.includes('output_expired')) db.exec('ALTER TABLE handoffs ADD COLUMN output_expired INTEGER NOT NULL DEFAULT 0');
   },
+  // 5：per-user 设置（S16）：key/value 而非 JSON blob，PATCH 变 per-key upsert，无 read-modify-write 竞争
+  (db) =>
+    db.exec(
+      `CREATE TABLE IF NOT EXISTS user_settings (
+         user_id INTEGER NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+         updated_at TEXT NOT NULL, PRIMARY KEY (user_id, key));`,
+    ),
+  // 6：token 版本（S17）：轮换真失效
+  (db) => {
+    const cols = (db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((c) => c.name);
+    if (!cols.includes('token_version')) db.exec('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1');
+  },
 ];
 
 export function migrate(db: DB): void {

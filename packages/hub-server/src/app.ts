@@ -14,6 +14,7 @@ import {
   CreateHandoffReqSchema,
   ModelConfigReqSchema,
   OssSignReqSchema,
+  PatchSettingsReqSchema,
   TERMINAL_STATUSES,
   type Bot,
   type CreateHandoffResp,
@@ -28,7 +29,7 @@ import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
 import { ossKeyOf, assertOwnedKey, userPrefix, SIGNED_URL_TTL_SECONDS, type OssSigner, type OssClient } from './oss.js';
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
-import { getBot, getUserModelConfig, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
+import { getBot, getUserModelConfig, getSettings, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setSetting, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
 import { userModelSecret } from './db.js';
 import { RunnerClient } from './runner-client.js';
 import type { SandboxConnector } from './connector.js';
@@ -71,6 +72,13 @@ const defaultPolicy = (): SandboxPolicy => ({
 /** 面板需要 list/head/bucketInfo；测试 Fake 只实现窄接口 OssSigner，鸭子判断 */
 const asOssClient = (s: OssSigner): OssClient | undefined =>
   typeof (s as Partial<OssClient>).head === 'function' ? (s as OssClient) : undefined;
+
+/** webhook 掩码：只留 access_token 尾 4 位，响应永不回明文（S16） */
+const maskWebhook = (url: string): string => {
+  const m = url.match(/access_token=([^&]+)/);
+  if (!m) return '••••';
+  return `…access_token=••••${m[1]!.slice(-4)}`;
+};
 
 /** S14 ?refresh=1 对账：真 list 补缺失 size；已被生命周期删掉的对象标 expired。key 均为库内自有 key，不经客户端 */
 async function reconcileOssMirror(db: DB, oss: OssClient, uid: number): Promise<void> {
@@ -139,21 +147,22 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const exists = db.prepare('SELECT id FROM users WHERE username=?').get(username);
     if (exists) throw fail(400, 'ERR_VALIDATION', 'username already taken');
     const info = db
-      .prepare('INSERT INTO users (username, password_hash, created_at) VALUES (?,?,?)')
-      .run(username, await hashPassword(password), nowIso());
-    const uid = Number(info.lastInsertRowid);
-    return reply.status(201).send({ token: signJwt({ uid, sub: username }, secret), user: { id: uid, username } });
+      .prepare('INSERT INTO users (username, password_hash, created_at) VALUES (?,?,?) RETURNING id, token_version')
+      .get(username, await hashPassword(password), nowIso()) as { id: number; token_version: number };
+    return reply
+      .status(201)
+      .send({ token: signJwt({ uid: info.id, sub: username, tv: info.token_version }, secret), user: { id: info.id, username } });
   });
 
   app.post('/api/auth/login', async (req, reply) => {
     const { username, password } = AuthReqSchema.parse(req.body);
-    const row = db.prepare('SELECT id, password_hash FROM users WHERE username=?').get(username) as
-      | { id: number; password_hash: string }
+    const row = db.prepare('SELECT id, password_hash, token_version FROM users WHERE username=?').get(username) as
+      | { id: number; password_hash: string; token_version: number }
       | undefined;
     if (!row || !(await verifyPassword(row.password_hash, password))) {
       throw fail(401, 'ERR_AUTH', 'invalid username or password');
     }
-    return reply.send({ token: signJwt({ uid: row.id, sub: username }, secret), user: { id: row.id, username } });
+    return reply.send({ token: signJwt({ uid: row.id, sub: username, tv: row.token_version }, secret), user: { id: row.id, username } });
   });
 
   // ── 守卫 ──────────────────────────────────────────────────
@@ -162,6 +171,9 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const token = header.startsWith('Bearer ') ? header.slice(7) : '';
     const payload = token ? verifyJwt(token, secret) : null;
     if (!payload) throw fail(401, 'ERR_AUTH', 'missing or invalid token');
+    // S17：轮换后旧 token 立刻失效；不接受 tv ?? 1 兑底，宁可强制重登一次
+    const row = db.prepare('SELECT token_version FROM users WHERE id=?').get(payload.uid) as { token_version: number } | undefined;
+    if (!row || payload.tv !== row.token_version) throw fail(401, 'ERR_AUTH', 'token revoked, re-login required');
     return { uid: payload.uid };
   };
 
@@ -671,6 +683,46 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const { key } = OssSignReqSchema.parse(req.body);
     assertOwnedKey(uid, key);
     return { url: await signer.signGet(key) };
+  });
+
+  // ── 设置面板（S16/S17）：webhook 加密落库，响应永不回明文；token 轮换真失效 ──
+  app.get('/api/settings', async (req) => {
+    const { uid } = requireAuth(req);
+    const raw = getSettings(db, uid);
+    const enc = raw['dingtalkWebhook'] ?? '';
+    const webhookPlain = enc ? decryptSecret(enc, secret) : '';
+    return {
+      settings: {
+        notifyStatusChange: (raw['notifyStatusChange'] ?? '1') === '1',
+        notifyChatSync: (raw['notifyChatSync'] ?? '0') === '1',
+        webhook: webhookPlain ? { configured: true, masked: maskWebhook(webhookPlain) } : { configured: false, masked: null },
+      },
+      server: {
+        hubUrl: process.env.HUB_WEB_URL ?? null,
+        ossBucket: process.env.OSS_BUCKET ?? null,
+        ossRegion: process.env.OSS_REGION ?? null,
+        signedUrlTtlSeconds: SIGNED_URL_TTL_SECONDS,
+        sandboxImage: sandboxImage(),
+        idleTtlMinutes: Number(process.env.SANDBOX_IDLE_TTL_MINUTES ?? 120),
+      },
+    };
+  });
+
+  app.patch('/api/settings', async (req) => {
+    const { uid } = requireAuth(req);
+    const body = PatchSettingsReqSchema.parse(req.body);
+    if (body.notifyStatusChange !== undefined) setSetting(db, uid, 'notifyStatusChange', body.notifyStatusChange ? '1' : '0');
+    if (body.notifyChatSync !== undefined) setSetting(db, uid, 'notifyChatSync', body.notifyChatSync ? '1' : '0');
+    if (body.webhook !== undefined) setSetting(db, uid, 'dingtalkWebhook', body.webhook ? encryptSecret(body.webhook, secret) : '');
+    return { ok: true };
+  });
+
+  app.post('/api/settings/token', async (req) => {
+    const { uid } = requireAuth(req);
+    const row = db
+      .prepare('UPDATE users SET token_version = token_version + 1 WHERE id=? RETURNING token_version, username')
+      .get(uid) as { token_version: number; username: string };
+    return { token: signJwt({ uid, sub: row.username, tv: row.token_version }, secret) };
   });
 
   app.get('/api/bots/:id/chats', async (req, reply) => {

@@ -11,6 +11,8 @@ const b64url = (b: Buffer | string) =>
 export interface JwtPayload {
   uid: number;
   sub: string;
+  /** token 版本（S17）：轮换后旧 token 立刻失效；verifyJwt 保持无状态，比对在 requireAuth */
+  tv?: number;
   iat: number;
   exp: number;
 }

@@ -194,6 +194,21 @@ export function recordSandboxReclaim(
   ).run(status, reason, at, lastError ?? null, at, podName);
 }
 
+// ── per-user 设置（S16）───────────────────────────────
+export const getSettings = (db: DB, uid: number): Record<string, string> => {
+  const rows = db.prepare('SELECT key, value FROM user_settings WHERE user_id=?').all(uid) as Array<{ key: string; value: string }>;
+  return Object.fromEntries(rows.map((r) => [r.key, r.value]));
+};
+
+export function setSetting(db: DB, uid: number, key: string, value: string): void {
+  db
+    .prepare(
+      `INSERT INTO user_settings (user_id, key, value, updated_at) VALUES (?,?,?,?)
+       ON CONFLICT(user_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+    )
+    .run(uid, key, value, nowIso());
+}
+
 /** 重启对账收养（S8）：保留 Pod 真实启动时间，不把已跑半小时的 Pod 报成刚创建 */
 export function adoptSandbox(
   db: DB,
