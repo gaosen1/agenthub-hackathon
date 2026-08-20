@@ -1,15 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { HandoffDetail, SandboxEvent } from '@agenthub/shared/contracts';
 import { useDataSource } from '../api/client.js';
 import { AcpClient } from '../api/acpClient.js';
 import { useHandoffEvents } from '../api/hooks.js';
 import { mockExtras } from '../api/mock.js';
 import type { ChatMsg } from '../api/mock.js';
+import { Markdown } from './Markdown.js';
 
 const nowHm = (): string => {
   const now = new Date();
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 };
+
+/** 新图标一律内联 SVG（MASTER §0）：Lucide 风格 1.5px 描边 */
+const IconSend = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M22 2 11 13" />
+    <path d="M22 2 15 22 11 13 2 9 22 2z" />
+  </svg>
+);
+const IconSpinner = () => (
+  <svg className="spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+  </svg>
+);
+
+const CHAT_W_MIN = 280;
+const CHAT_W_MAX = 640;
+const clampW = (w: number): number => Math.min(CHAT_W_MAX, Math.max(CHAT_W_MIN, w));
 
 /**
  * 云端会话面板。
@@ -28,6 +46,15 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
   const [conn, setConn] = useState<'idle' | 'connecting' | 'ready' | 'error'>('idle');
   const [connErr, setConnErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [chatW, setChatW] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem('agenthub.chatW'));
+      if (Number.isFinite(v) && v >= CHAT_W_MIN && v <= CHAT_W_MAX) return v;
+    } catch {
+      /* 隐私模式等忽略 */
+    }
+    return 360;
+  });
   const body = useRef<HTMLDivElement>(null);
   const acp = useRef<AcpClient | null>(null);
   /** 流式中的 agent 气泡索引（-1 = 无进行中气泡） */
@@ -109,7 +136,34 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
 
   useEffect(() => {
     if (body.current) body.current.scrollTop = body.current.scrollHeight;
-  }, [msgs, taskHistory]);
+  }, [msgs, taskHistory, busy]);
+
+  // 侧栏宽度：写 --chat-w 变量（.main 网格消费）+ localStorage 持久化
+  useEffect(() => {
+    document.documentElement.style.setProperty('--chat-w', `${chatW}px`);
+    try {
+      localStorage.setItem('agenthub.chatW', String(chatW));
+    } catch {
+      /* 忽略 */
+    }
+  }, [chatW]);
+
+  const startResize = (e: ReactPointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = chatW;
+    const move = (ev: PointerEvent) => setChatW(clampW(startW + (startX - ev.clientX)));
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  const onResizeKey = (e: KeyboardEvent) => {
+    if (e.key === 'ArrowLeft') setChatW((v) => clampW(v + 24));
+    if (e.key === 'ArrowRight') setChatW((v) => clampW(v - 24));
+  };
 
   const send = () => {
     const v = text.trim();
@@ -145,6 +199,15 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
 
   return (
     <aside className="chat">
+      <div
+        className="chat-resize"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整会话面板宽度"
+        tabIndex={0}
+        onPointerDown={startResize}
+        onKeyDown={onResizeKey}
+      />
       <div className="chat-h">
         <div className="t">
           <i className="fa-solid fa-comments" /> 云端会话
@@ -191,7 +254,7 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
                 {c.time ? ` · ${c.time}` : ''}
               </div>
               <div className="bubble">
-                {c.text || (busy && i === shown.length - 1 && c.role === 'agent' ? '…' : c.text)}
+                {c.role === 'agent' && c.text ? <Markdown text={c.text} /> : c.text}
                 {c.tool && (
                   <div className="tool-call">
                     <i className="fa-solid fa-wrench" />
@@ -202,6 +265,24 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
             </div>
           </div>
         ))}
+        {busy && streamIdx.current < 0 && (
+          <div className="msg agent fade-in">
+            <div className="av">
+              <i className="fa-solid fa-robot" />
+            </div>
+            <div className="bd">
+              <div className="who">Cloud Agent</div>
+              <div className="bubble thinking">
+                <span className="tdots" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
+                </span>
+                思考中
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       {canChat ? (
         <div className="chat-input">
@@ -228,7 +309,7 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
               <span className="tip">
                 {busy ? (
                   <>
-                    <i className="fa-solid fa-circle-notch fa-spin" /> Agent 处理中…
+                    <IconSpinner /> Agent 处理中…
                   </>
                 ) : (
                   <>
@@ -236,8 +317,13 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
                   </>
                 )}
               </span>
-              <button className="send" onClick={send} disabled={busy || (isHub && conn !== 'ready')}>
-                <i className="fa-solid fa-paper-plane" />
+              <button
+                className="send"
+                onClick={send}
+                disabled={busy || (isHub && conn !== 'ready')}
+                title={busy ? '模型输出中' : '发送'}
+              >
+                {busy ? <IconSpinner /> : <IconSend />}
               </button>
             </div>
           </div>
