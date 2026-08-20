@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import {
   appendHandoffMarker,
+  computeLockHash,
   createFullBundle,
   getRepoInfo,
   getWorkspaceScopeDirName,
@@ -59,6 +60,8 @@ export async function runPush(opts: PushOptions): Promise<void> {
     botId,
     bindChatId: opts.chat,
     timeoutMinutes: opts.timeout ? Number(opts.timeout) : 30,
+    // S19 依赖缓存：lockfile 哈希随 handoff 上报，worker 与 OSS sidecar 比对
+    ...(computeLockHash(workspacePath) ? { depsLockHash: computeLockHash(workspacePath) } : {}),
   };
   const created = await client.createHandoff(req);
   console.log(`✓ handoff 创建: ${created.handoffId}`);
@@ -73,8 +76,10 @@ export async function runPush(opts: PushOptions): Promise<void> {
     const bundlePath = join(staging, 'repo.bundle');
     createFullBundle(workspacePath, bundlePath);
 
-    // 缺省含未跟踪文件：新写但未 git add 的文件正是接力最需要带上的（--no-include-untracked 可关）
-    const includeUntracked = opts.includeUntracked ?? true;
+    // 缺省含未跟踪文件：新写但未 git add 的文件正是接力最需要带上的。
+    // 优先级（S21）：--no-include-untracked 显式关 > 本地 config > 服务端设置 > 缺省 true
+    const server = await client.getServerSettings();
+    const includeUntracked = opts.includeUntracked === false ? false : (cfg.includeUntracked ?? server?.includeUntracked ?? true);
     let worktreeDir: string | undefined;
     if (repo.dirty || includeUntracked) {
       worktreeDir = join(staging, 'worktree');
