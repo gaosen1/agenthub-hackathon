@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -28,6 +28,8 @@ const manifests = new Map<string, HandoffManifest>();
 let nextId = 1;
 let hubUrl = '';
 let server: Server;
+/** S21：服务端 includeUntracked 设置；null 表示缺省 true */
+let serverIncludeUntracked: boolean | null = null;
 
 function startMockHub(): Promise<string> {
   server = createServer((req, res) => {
@@ -53,6 +55,19 @@ function startMockHub(): Promise<string> {
         return;
       }
       const pullIntent = url.match(/^\/api\/handoffs\/(hf-[0-9a-f]{6})\/pull-intent$/);
+      if (req.method === 'GET' && url === '/api/settings') {
+        json(200, {
+          settings: {
+            includeUntracked: serverIncludeUntracked ?? true,
+            mergeMode: 'merge',
+            backupSessions: false,
+            notifyStatusChange: true,
+            notifyChatSync: false,
+            webhook: { configured: false, masked: null },
+          },
+        });
+        return;
+      }
       if (req.method === 'POST' && url === '/api/handoffs') {
         const id = `hf-e2e${String(nextId++).padStart(3, '0')}`;
         json(201, { handoffId: id, uploadUrl: `${hubUrl}/oss/${id}/input`, webUrl: `${hubUrl}/tasks/${id}` });
@@ -256,5 +271,32 @@ describe('M1 端到端（CLI ↔ mock Hub ↔ mock OSS）', () => {
     assert.doesNotMatch(lines[noticeIdx + 2], /agenthub_source/);
     assert.match(lines[noticeIdx + 3], /云端：收尾/);
     assert.match(lines.at(-1)!, /agenthub_merged_marker/);
+  });
+
+  it('pull 场景 4（S21）：服务端 includeUntracked 真生效——false 时未跟踪文件不进快照', async () => {
+    writeFileSync(join(repo, 'untracked.txt'), 'local only\n');
+    try {
+      const { runPush } = await import('./push.js');
+
+      serverIncludeUntracked = true;
+      await runPush({ task: 'with untracked' });
+      const w1 = mkdtempSync(join(tmpdir(), 'ah-e2e-u1-'));
+      writeFileSync(join(w1, 'in.tar.gz'), ossStore.get('/oss/hf-e2e003/input')!);
+      const p1 = await unpackHandoff(join(w1, 'in.tar.gz'), join(w1, 'x'));
+      assert.ok(p1.worktreeDir && existsSync(join(p1.worktreeDir, 'untracked.txt')), '服务端 true 时未跟踪文件应进快照');
+
+      serverIncludeUntracked = false;
+      await runPush({ task: 'without untracked' });
+      const w2 = mkdtempSync(join(tmpdir(), 'ah-e2e-u2-'));
+      writeFileSync(join(w2, 'in.tar.gz'), ossStore.get('/oss/hf-e2e004/input')!);
+      const p2 = await unpackHandoff(join(w2, 'in.tar.gz'), join(w2, 'x'));
+      assert.ok(
+        !p2.worktreeDir || !existsSync(join(p2.worktreeDir, 'untracked.txt')),
+        '服务端 false 时未跟踪文件不应进快照',
+      );
+    } finally {
+      serverIncludeUntracked = null;
+      rmSync(join(repo, 'untracked.txt'), { force: true });
+    }
   });
 });

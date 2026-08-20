@@ -70,6 +70,23 @@ export class HubClient {
     return this.request('POST', `/api/handoffs/${id}/uploaded`);
   }
 
+  /** S21：服务端 handoff 默认策略；离线/未登录回退 null，由调用方落本地默认 */
+  async getServerSettings(): Promise<{
+    includeUntracked?: boolean;
+    mergeMode?: 'merge' | 'branch';
+    backupSessions?: boolean;
+  } | null> {
+    try {
+      return await this.request('GET', '/api/settings', undefined, (d) => (d as { settings: {
+        includeUntracked: boolean;
+        mergeMode: 'merge' | 'branch';
+        backupSessions: boolean;
+      } }).settings);
+    } catch {
+      return null;
+    }
+  }
+
   getHandoff(id: string): Promise<HandoffDetail> {
     return this.request('GET', `/api/handoffs/${id}`, undefined, (d) => HandoffDetailSchema.parse(d));
   }

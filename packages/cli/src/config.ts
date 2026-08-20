@@ -7,6 +7,10 @@ import { dirname, join } from 'node:path';
 export interface CliConfig {
   hubUrl: string;
   token?: string;
+  /** S20：本地覆盖项；缺省遵循服务端 GET /api/settings（S21） */
+  includeUntracked?: boolean;
+  mergeMode?: 'merge' | 'branch';
+  backupSessions?: boolean;
 }
 
 const DEFAULT_HUB_URL = 'http://localhost:3000';

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import {
@@ -25,6 +25,11 @@ export async function runPull(handoffId: string | undefined, opts: PullOptions):
   const repo = getRepoInfo(process.cwd());
   const workspacePath = repo.root;
 
+  // S21：--branch 显式 > 本地 config.mergeMode > 服务端 mergeMode > 缺省 merge
+  const server = await client.getServerSettings();
+  const branchMode = opts.branch ?? (cfg.mergeMode ?? server?.mergeMode ?? 'merge') === 'branch';
+  const backupSessions = cfg.backupSessions ?? server?.backupSessions ?? false;
+
   // 缺省：当前仓库最近一次已终态任务
   let id = handoffId;
   if (!id) {
@@ -34,8 +39,8 @@ export async function runPull(handoffId: string | undefined, opts: PullOptions):
     id = latest.id;
   }
 
-  // F-3：本地有未提交变更时强制提示（--branch 落独立分支不受影响）
-  if (repo.dirty && !opts.branch) {
+  // F-3：本地有未提交变更时强制提示（branch 模式落独立分支不受影响）
+  if (repo.dirty && !branchMode) {
     throw new Error('本地有未提交变更，请先 stash 或 commit 后再 pull（或使用 --branch 落独立分支）');
   }
 
@@ -57,7 +62,7 @@ export async function runPull(handoffId: string | undefined, opts: PullOptions):
         pkg.bundlePath,
         manifest.repo.baseCommit,
         manifest.handoffId,
-        opts.branch ?? false,
+        branchMode,
       );
       if (r.newCommitCount === 0) codeSummary = '云端 commit 已在本地（重复 pull，跳过）';
       else if (r.mode === 'branch') codeSummary = `${r.newCommitCount} 个云端 commit 落到分支 ${r.branchName}`;
@@ -74,7 +79,8 @@ export async function runPull(handoffId: string | undefined, opts: PullOptions):
         const cloudPath = join(cloudChats, f);
         const localPath = sessionPath(workspacePath, sid);
         if (sid === manifest.sessionId && existsSync(localPath)) {
-          // 移交的 session 走时间线合并
+          // 移交的 session 走时间线合并；backupSessions 开启时合并前额外留一份本机备份
+          if (backupSessions) copyFileSync(localPath, `${localPath}.agenthub-bak`);
           const r = mergeSessionJsonlFile(localPath, cloudPath, manifest.handoffId);
           if (r.skipped) sessionSummaries.push(`session ${sid}: 已合并过（幂等跳过）`);
           else

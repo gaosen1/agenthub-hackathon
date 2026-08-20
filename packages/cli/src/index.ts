@@ -128,4 +128,46 @@ program
     }
   });
 
+program
+  .command('config')
+  .description('本地配置（S20）：set/get/list；handoff 策略缺省遵循服务端设置（S21），本地可覆盖')
+  .argument('<action>', 'set / get / list')
+  .argument('[key]')
+  .argument('[value]')
+  .action((action: string, key?: string, value?: string) => {
+    try {
+      const cfg = loadConfig();
+      const bool = (v: string): boolean => {
+        if (v === 'true') return true;
+        if (v === 'false') return false;
+        throw new Error(`布尔值须为 true/false，收到: ${v}`);
+      };
+      if (action === 'list') {
+        console.log(JSON.stringify(cfg, null, 2));
+        return;
+      }
+      if (action === 'get') {
+        if (!key) throw new Error('缺少 key');
+        const v = (cfg as unknown as Record<string, unknown>)[key];
+        console.log(v === undefined ? '' : String(v));
+        return;
+      }
+      if (action === 'set') {
+        if (!key || value === undefined) throw new Error('用法: agenthub config set <key> <value>');
+        if (key === 'includeUntracked') saveConfig({ ...cfg, includeUntracked: bool(value) });
+        else if (key === 'backupSessions') saveConfig({ ...cfg, backupSessions: bool(value) });
+        else if (key === 'mergeMode') {
+          if (value !== 'merge' && value !== 'branch') throw new Error(`mergeMode 须为 merge/branch，收到: ${value}`);
+          saveConfig({ ...cfg, mergeMode: value });
+        } else if (key === 'hubUrl') saveConfig({ ...cfg, hubUrl: value });
+        else throw new Error(`未知配置项: ${key}（可用: includeUntracked/backupSessions/mergeMode/hubUrl）`);
+        console.log(`✓ ${key} = ${value}`);
+        return;
+      }
+      throw new Error(`未知动作: ${action}（支持 set/get/list）`);
+    } catch (e) {
+      fail(e);
+    }
+  });
+
 program.parse();
