@@ -1,12 +1,18 @@
-/* 移植自 docs/prototype.html —— 设计令牌 + 组件样式（UI 契约） */
+/* 移植自 docs/prototype.html —— 设计令牌 + 组件样式（UI 契约）
+   t20 反 AI 味重构：无渐变/无发光/无玻璃拟态；层级靠背景阶 + 发丝线；
+   新令牌 --n-* 与 design-system/agenthub/MASTER.md 对齐。 */
 :root{
-  --bg:#0b0e14; --bg2:#10141d; --bg3:#161b26; --bg4:#1d2330;
-  --line:#232a3a; --line2:#2c3550;
-  --tx:#e6e9f0; --tx2:#9aa4b8; --tx3:#5f6a80;
-  --brand:#6d7cff; --brand2:#9a6dff; --grad:linear-gradient(135deg,#6d7cff,#9a6dff);
+  --bg:#0f1216; --bg2:#14181e; --bg3:#1a2028; --bg4:#222933;
+  --line:#262c35; --line2:#333b47;
+  --tx:#e8ebef; --tx2:#9aa4b2; --tx3:#66707e;
+  --brand:#58a6ff; --brand2:#39c5cf;
   --ok:#3ecf8e; --warn:#f5b04d; --err:#f0616d; --info:#58a6ff; --cyan:#39c5cf;
+  --cta:#e8ebef; --cta-ink:#0f1216;
   --mono:'SF Mono',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
-  --radius:12px;
+  --radius:6px;
+  /* 新设计系统令牌（MASTER.md） */
+  --n-bg:#0f1216; --n-panel:#14181e; --n-raise:#1a2028; --n-line:#262c35; --n-line2:#333b47;
+  --n-tx:#e8ebef; --n-tx2:#9aa4b2; --n-tx3:#66707e; --n-cta:#e8ebef; --n-focus:#58a6ff;
 }
 *{margin:0;padding:0;box-sizing:border-box}
 html,body,#root{height:100%}
@@ -30,9 +36,8 @@ body{
 }
 .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;letter-spacing:.3px}
 .brand .logo{
-  width:30px;height:30px;border-radius:8px;background:var(--grad);
-  display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;
-  box-shadow:0 2px 12px rgba(122,110,255,.45);
+  width:30px;height:30px;border-radius:6px;background:var(--cta);
+  display:flex;align-items:center;justify-content:center;color:var(--cta-ink);font-size:14px;
 }
 .brand small{font-weight:400;color:var(--tx3);font-size:12px;margin-left:2px}
 .topbar .right{margin-left:auto;display:flex;align-items:center;gap:14px}
@@ -40,8 +45,8 @@ body{
   display:flex;align-items:center;gap:7px;font-size:12px;color:var(--tx2);
   padding:5px 12px;border:1px solid var(--line);border-radius:20px;background:var(--bg3);
 }
-.conn .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
-.conn .dot.mock{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+.conn .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.conn .dot.mock{background:var(--warn)}
 .avatar{
   width:30px;height:30px;border-radius:50%;background:var(--bg4);border:1px solid var(--line2);
   display:flex;align-items:center;justify-content:center;color:var(--tx2);font-size:13px;
@@ -73,7 +78,7 @@ body{
   font-size:11px;padding:3px 10px;border-radius:20px;border:1px solid var(--line);
   color:var(--tx2);cursor:pointer;background:transparent;
 }
-.chip.active{background:rgba(109,124,255,.14);border-color:var(--brand);color:#aab4ff}
+.chip.active{background:var(--bg4);border-color:var(--line2);color:var(--tx)}
 .task-list{flex:1;overflow-y:auto;padding:0 10px 16px}
 .task-item{
   padding:12px;border-radius:var(--radius);cursor:pointer;border:1px solid transparent;margin-bottom:6px;
@@ -118,8 +123,8 @@ body{
   border:1px solid var(--line2);background:var(--bg3);color:var(--tx);border-radius:8px;
   padding:7px 14px;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
 }
-.btn:hover{border-color:var(--brand)}
-.btn.primary{background:var(--grad);border:none;color:#fff;font-weight:600}
+.btn:hover{border-color:var(--line2)}
+.btn.primary{background:var(--cta);border:none;color:var(--cta-ink);font-weight:600}
 .btn.danger{color:var(--err)}
 .btn.danger:hover{border-color:var(--err)}
 
@@ -134,8 +139,8 @@ body{
   font-size:12px;background:var(--bg4);color:var(--tx3);border:2px solid var(--line2);z-index:1;
 }
 .step.done .ic{background:rgba(62,207,142,.15);color:var(--ok);border-color:var(--ok)}
-.step.now .ic{background:rgba(88,166,255,.15);color:var(--info);border-color:var(--info);box-shadow:0 0 0 4px rgba(88,166,255,.12)}
-.step.now.st-done .ic{background:rgba(62,207,142,.15);color:var(--ok);border-color:var(--ok);box-shadow:0 0 0 4px rgba(62,207,142,.12)}
+.step.now .ic{background:rgba(88,166,255,.15);color:var(--info);border-color:var(--info)}
+.step.now.st-done .ic{background:rgba(62,207,142,.15);color:var(--ok);border-color:var(--ok)}
 .step.fail .ic{background:rgba(240,97,109,.15);color:var(--err);border-color:var(--err)}
 .step .lb{font-size:11px;color:var(--tx3);white-space:nowrap}
 .step.done .lb,.step.now .lb{color:var(--tx2)}
@@ -184,7 +189,7 @@ body{
 @keyframes blink{50%{opacity:0}}
 
 /* pull guide */
-.pull-guide{background:linear-gradient(135deg,rgba(62,207,142,.07),rgba(109,124,255,.07));border:1px solid rgba(62,207,142,.3)}
+.pull-guide{background:var(--bg2);border:1px solid rgba(62,207,142,.3)}
 .pull-guide .card-h i{color:var(--ok)}
 .cmd{
   display:flex;align-items:center;gap:10px;background:#080b11;border:1px solid var(--line);
@@ -223,7 +228,7 @@ body{
   width:28px;height:28px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:12px;
 }
 .msg.user .av{background:rgba(109,124,255,.15);color:var(--brand)}
-.msg.agent .av{background:var(--grad);color:#fff}
+.msg.agent .av{background:var(--bg4);color:var(--tx);border:1px solid var(--line2)}
 .msg .bd{min-width:0}
 .msg .who{font-size:11px;color:var(--tx3);margin-bottom:4px;display:flex;align-items:center;gap:7px}
 .msg .who .via{background:var(--bg4);padding:1px 7px;border-radius:4px;font-size:10px}
@@ -255,8 +260,8 @@ body{
 .chat-input .bar{display:flex;align-items:center;margin-top:6px}
 .chat-input .tip{font-size:11px;color:var(--tx3)}
 .chat-input .send{
-  margin-left:auto;background:var(--grad);border:none;color:#fff;width:30px;height:30px;
-  border-radius:8px;cursor:pointer;font-size:12px;
+  margin-left:auto;background:var(--cta);border:none;color:var(--cta-ink);width:30px;height:30px;
+  border-radius:6px;cursor:pointer;font-size:12px;
 }
 .chat-disabled{padding:20px 16px;border-top:1px solid var(--line);text-align:center;font-size:12px;color:var(--tx3)}
 .chat-disabled i{display:block;font-size:18px;margin-bottom:8px;color:var(--tx3)}
@@ -271,7 +276,7 @@ body{
 .link-btn:hover{text-decoration:underline}
 
 /* ---------- Pull 指引 Modal ---------- */
-.modal-mask{position:fixed;inset:0;background:rgba(4,6,10,.72);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:100}
+.modal-mask{position:fixed;inset:0;background:rgba(4,6,10,.72);display:flex;align-items:center;justify-content:center;z-index:100}
 .modal{width:680px;max-width:93vw;max-height:88vh;overflow-y:auto;background:var(--bg2);border:1px solid var(--line2);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.6)}
 .modal-h{display:flex;align-items:center;gap:12px;padding:18px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg2);z-index:1}
 .modal-h .mh-icon{width:36px;height:36px;border-radius:9px;background:rgba(62,207,142,.12);color:var(--ok);display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0}
@@ -292,6 +297,12 @@ body{
 
 .fade-in{animation:fadeIn .3s ease}
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* 可达性：键盘焦点环 + reduced-motion 全关（MASTER.md） */
+:focus-visible{outline:2px solid var(--n-focus);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
 
 /* ---------- 顶栏导航 ---------- */
 .topbar .nav{display:flex;gap:4px;margin-left:24px}
