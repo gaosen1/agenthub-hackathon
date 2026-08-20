@@ -354,6 +354,19 @@ export async function buildOutput(
   return { tarball, manifest: outManifest };
 }
 
+// ── S19 依赖缓存：node_modules 快照跨会话复用，免重复安装 ────────────────
+/** 解压依赖缓存 tar 到工作区（包内为 node_modules/ 相对路径） */
+export async function extractDepsCache(file: string, workspacePath: string): Promise<void> {
+  await tar.x({ file, cwd: workspacePath });
+}
+
+/** 快照工作区 node_modules 为 tar.gz；不存在返回 false */
+export async function buildDepsCache(workspacePath: string, outPath: string): Promise<boolean> {
+  if (!(await exists(join(workspacePath, 'node_modules')))) return false;
+  await tar.c({ file: outPath, cwd: workspacePath, gzip: true }, ['node_modules']);
+  return true;
+}
+
 export async function uploadTo(url: string, file: string): Promise<void> {
   const data = await fs.readFile(file);
   const res = await fetch(url, {

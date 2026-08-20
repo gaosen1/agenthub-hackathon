@@ -122,6 +122,11 @@ async function buildInputPackage(): Promise<{ manifest: HandoffManifest; tarball
   git(workspacePath, 'bundle', 'create', join(pkg, 'repo.bundle'), '--all');
   await fs.mkdir(join(pkg, 'worktree'), { recursive: true });
   await fs.writeFile(join(pkg, 'worktree', 'dirty.txt'), 'uncommitted');
+  // S19：带 node_modules 与 lockfile，验证依赖缓存快照/还原闭环
+  await fs.mkdir(join(pkg, 'worktree', 'node_modules', '.bin'), { recursive: true });
+  await fs.writeFile(join(pkg, 'worktree', 'node_modules', '.bin', 'jest'), 'stub-bin');
+  await fs.writeFile(join(pkg, 'worktree', 'package.json'), '{"name":"proj","version":"1.0.0"}\n');
+  await fs.writeFile(join(pkg, 'worktree', 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
   const chats = join(pkg, 'qwen-home', 'projects', wsHash, 'chats');
   await fs.mkdir(chats, { recursive: true });
   await fs.writeFile(join(chats, `${sessionId}.jsonl`), '{"role":"user","content":"hi"}\n');
@@ -171,11 +176,26 @@ describe('runner /load → /snapshot 端到端（stub qwen）', () => {
     const liveChat = join(process.env.QWEN_HOME_DIR!, 'projects', manifest.wsHash, 'chats', `${manifest.sessionId}.jsonl`);
     expect((await fs.readFile(liveChat, 'utf8')).toString()).toContain('hi');
 
-    // /snapshot：打包上传返回包
-    const snap = await app.inject({ method: 'POST', url: '/snapshot', payload: { outputUrl: `${httpBase}/output.tar.gz` } });
+    // /snapshot：打包上传返回包 + S19 依赖缓存快照/sidecar
+    const snap = await app.inject({
+      method: 'POST',
+      url: '/snapshot',
+      payload: {
+        outputUrl: `${httpBase}/output.tar.gz`,
+        depsCachePutUrl: `${httpBase}/deps.tar.gz`,
+        depsSidecarPutUrl: `${httpBase}/deps.json`,
+      },
+    });
     expect(snap.statusCode).toBe(200);
     const uploaded = uploads.get('/output.tar.gz');
     expect(uploaded).toBeDefined();
+
+    // S19：node_modules 快照与 sidecar 已上传，sidecar 带 lockHash
+    const depsTar = uploads.get('/deps.tar.gz');
+    expect(depsTar).toBeDefined();
+    const sidecar = JSON.parse(uploads.get('/deps.json')!.toString('utf8')) as { lockHash: string; bytes: number };
+    expect(sidecar.lockHash.length).toBeGreaterThan(0);
+    expect(sidecar.bytes).toBeGreaterThan(0);
 
     // 解包校验返回包结构（spec §3.1 output）
     const outDir = join(root, 'out-unpacked');
@@ -197,9 +217,29 @@ describe('runner /load → /snapshot 端到端（stub qwen）', () => {
     const events = await fs.readFile(join(outDir, 'logs', 'events.jsonl'), 'utf8');
     expect(events).toContain('task relay finished');
 
-    // result.bundle 可被本地 git 消费（pull 侧闭环的前半段）：verify 退出码 0 即有效
+    // result.bundle 可被本地 git 消费（pull 侧闭环的前半段）：verify 退出码 0  即有效
     expect(() => git(manifest.workspacePath, 'bundle', 'verify', join(outDir, 'result.bundle'))).not.toThrow();
-
+    
+    // S19 闭环：删掉 node_modules 后二次 /load 带缓存 URL，免重装还原
+    await fs.rm(join(manifest.workspacePath, 'node_modules'), { recursive: true, force: true });
+    downloads.set('/deps.tar.gz', depsTar!);
+    const load2 = await app.inject({
+      method: 'POST',
+      url: '/load',
+      payload: { inputUrl: `${httpBase}/input.tar.gz`, task: manifest.task, depsCacheUrl: `${httpBase}/deps.tar.gz` },
+    });
+    expect(load2.statusCode).toBe(202);
+    const deadline2 = Date.now() + 30_000;
+    let health2: { serveReady: boolean; lastError?: string } = { serveReady: false };
+    while (Date.now() < deadline2) {
+      const res = await app.inject({ method: 'GET', url: '/healthz' });
+      health2 = res.json() as typeof health2;
+      if (health2.serveReady || health2.lastError) break;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    expect(health2.lastError).toBeUndefined();
+    expect((await fs.readFile(join(manifest.workspacePath, 'node_modules', '.bin', 'jest'), 'utf8')).toString()).toBe('stub-bin');
+    
     await app.close();
   }, 60_000);
 });

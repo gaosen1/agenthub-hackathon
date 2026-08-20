@@ -9,12 +9,14 @@ import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
+import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, computeLockHash, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
 import { allLogs, appendLog, logsAfter, state } from './state.js';
 import { runTask, startServe, stopServe, waitServeReady } from './qwen.js';
 import {
+  buildDepsCache,
   buildOutput,
   downloadTo,
+  extractDepsCache,
   listChats,
   qwenHome,
   restoreContext,
@@ -145,11 +147,29 @@ export function buildRunner(): FastifyInstance {
         const tarball = join(WORK_ROOT, 'input.tar.gz');
         const staging = join(WORK_ROOT, 'staging');
         appendLog('sys', 'downloading input package');
+        // S19：依赖缓存与输入包并行下载，还原后解压，免重复安装依赖
+        const depsTar = join(WORK_ROOT, 'deps-cache.tar.gz');
+        const depsDl = body.depsCacheUrl
+          ? downloadTo(body.depsCacheUrl, depsTar)
+              .then(() => true)
+              .catch(() => {
+                appendLog('info', 'deps cache download failed, will reinstall');
+                return false;
+              })
+          : Promise.resolve(false);
         await downloadTo(body.inputUrl, tarball);
         manifest = await unpackInput(tarball, staging);
         state.loadedHandoffId = manifest.handoffId;
         appendLog('sys', `restoring workspace ${manifest.workspacePath} (${manifest.wsHash})`);
         await restoreContext(staging, manifest);
+        if (await depsDl) {
+          try {
+            await extractDepsCache(depsTar, manifest.workspacePath);
+            appendLog('ok', 'deps cache restored (node_modules)');
+          } catch (e) {
+            appendLog('err', `deps cache extract failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
 
         if (state.mode === 'bot') {
           const botName = process.env.BOT_NAME ?? 'bot';
@@ -221,6 +241,33 @@ export function buildRunner(): FastifyInstance {
     });
     await uploadTo(body.outputUrl, tarball);
     appendLog('ok', 'output uploaded');
+    // S19 依赖缓存：node_modules 存在且未超 1.5GB 时上传快照 + sidecar，失败不致命
+    if (body.depsCachePutUrl && body.depsSidecarPutUrl) {
+      try {
+        const depsTar = join(WORK_ROOT, `deps-${manifest.handoffId}.tar.gz`);
+        if (await buildDepsCache(manifest.workspacePath, depsTar)) {
+          const st = await fs.stat(depsTar);
+          if (st.size > 1.5 * 1024 ** 3) {
+            appendLog('info', 'deps cache over 1.5GB, skip');
+          } else {
+            await uploadTo(body.depsCachePutUrl, depsTar);
+            const sidecar = join(WORK_ROOT, `deps-${manifest.handoffId}.json`);
+            await fs.writeFile(
+              sidecar,
+              JSON.stringify({
+                lockHash: computeLockHash(manifest.workspacePath),
+                bytes: st.size,
+                createdAt: new Date().toISOString(),
+              }),
+            );
+            await uploadTo(body.depsSidecarPutUrl, sidecar);
+            appendLog('ok', `deps cache uploaded (${Math.round(st.size / 1e6)}MB)`);
+          }
+        }
+      } catch (e) {
+        appendLog('err', `deps cache upload failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
     return reply.send({ manifest: outManifest });
   });
 
