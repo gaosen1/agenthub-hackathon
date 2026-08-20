@@ -157,11 +157,21 @@ export function buildRunner(): FastifyInstance {
                 return false;
               })
           : Promise.resolve(false);
+        // S20：warm 全量 bundle 并行下载（delta 模式的合成基）
+        const warmBundle = join(WORK_ROOT, 'warm.bundle');
+        const warmDl = body.warmBundleUrl
+          ? downloadTo(body.warmBundleUrl, warmBundle)
+              .then(() => warmBundle)
+              .catch(() => {
+                appendLog('info', 'warm bundle download failed');
+                return undefined;
+              })
+          : Promise.resolve<string | undefined>(undefined);
         await downloadTo(body.inputUrl, tarball);
         manifest = await unpackInput(tarball, staging);
         state.loadedHandoffId = manifest.handoffId;
         appendLog('sys', `restoring workspace ${manifest.workspacePath} (${manifest.wsHash})`);
-        await restoreContext(staging, manifest);
+        await restoreContext(staging, manifest, await warmDl);
         if (await depsDl) {
           try {
             await extractDepsCache(depsTar, manifest.workspacePath);
@@ -266,6 +276,21 @@ export function buildRunner(): FastifyInstance {
         }
       } catch (e) {
         appendLog('err', `deps cache upload failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    // S20 warm 全量 bundle：快照 workspace --all，下次 push 只需传 delta
+    if (body.warmBundlePutUrl && body.warmSidecarPutUrl) {
+      try {
+        const warm = join(WORK_ROOT, `warm-${manifest.handoffId}.bundle`);
+        await exec('git', ['bundle', 'create', warm, '--all'], { cwd: manifest.workspacePath });
+        await uploadTo(body.warmBundlePutUrl, warm);
+        const head = (await exec('git', ['rev-parse', 'HEAD'], { cwd: manifest.workspacePath })).stdout.trim();
+        const warmSidecar = join(WORK_ROOT, `warm-${manifest.handoffId}.json`);
+        await fs.writeFile(warmSidecar, JSON.stringify({ head, createdAt: new Date().toISOString() }));
+        await uploadTo(body.warmSidecarPutUrl, warmSidecar);
+        appendLog('ok', 'warm bundle uploaded');
+      } catch (e) {
+        appendLog('err', `warm bundle upload failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     return reply.send({ manifest: outManifest });

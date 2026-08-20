@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import type { HandoffStatus, SandboxPolicy } from '@agenthub/shared';
 import type { DB } from './db.js';
 import type { OssSigner, OssClient } from './oss.js';
-import { ossKeyOf, asOssClient, depsCacheKeyOf, depsSidecarKeyOf } from './oss.js';
+import { ossKeyOf, asOssClient, depsCacheKeyOf, depsSidecarKeyOf, warmBundleKeyOf, warmSidecarKeyOf } from './oss.js';
 import { sandboxImage, type PodOrchestrator, type PodPhase, type SandboxPodInfo } from './k8s.js';
 import type { PodRef, SandboxConnector } from './connector.js';
 import { RunnerClient } from './runner-client.js';
@@ -231,6 +231,10 @@ export class Worker {
         await runner.load({
           inputUrl,
           ...(depsCacheUrl ? { depsCacheUrl } : {}),
+          // S20：delta 模式下发 warm 全量 bundle URL（集群内下载）
+          ...(h.bundle_mode === 'delta' && ossForDeps?.configured
+            ? { warmBundleUrl: await this.signer.signGet(warmBundleKeyOf(h.user_id, h.ws_hash)) }
+            : {}),
           ...(h.task ? { task: h.task } : {}),
           ...(h.bind_chat_id ? { bindChatId: h.bind_chat_id } : {}),
           ...(h.serve_token ? { serveToken: h.serve_token } : {}),
@@ -320,9 +324,12 @@ export class Worker {
         const oss = asOssClient(this.signer);
         const depsPut = oss?.configured ? await this.signer.signPut(depsCacheKeyOf(h.user_id, h.ws_hash)) : undefined;
         const sidecarPut = oss?.configured ? await this.signer.signPut(depsSidecarKeyOf(h.user_id, h.ws_hash)) : undefined;
+        const warmPut = oss?.configured ? await this.signer.signPut(warmBundleKeyOf(h.user_id, h.ws_hash)) : undefined;
+        const warmSidecarPut = oss?.configured ? await this.signer.signPut(warmSidecarKeyOf(h.user_id, h.ws_hash)) : undefined;
         const { manifest } = await runner.snapshot({
           outputUrl,
           ...(depsPut && sidecarPut ? { depsCachePutUrl: depsPut, depsSidecarPutUrl: sidecarPut } : {}),
+          ...(warmPut && warmSidecarPut ? { warmBundlePutUrl: warmPut, warmSidecarPutUrl: warmSidecarPut } : {}),
         });
         patchHandoff(this.db, h.id, { output_oss_key: outputKey, result_manifest: JSON.stringify(manifest) });
         // S12：真相时刻 head 一次落 output size；失败不致命

@@ -7,7 +7,7 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import * as tar from 'tar';
+import { tarCreate, tarExtract } from '@agenthub/shared';
 import { HandoffManifestSchema, getWorkspaceScopeDirName, type HandoffManifest, type ChatListItem, type HandoffResult, type SandboxEvent } from '@agenthub/shared';
 
 const exec = promisify(execFile);
@@ -30,7 +30,7 @@ export async function downloadTo(url: string, dest: string): Promise<void> {
 export async function unpackInput(tarball: string, staging: string): Promise<HandoffManifest> {
   await fs.rm(staging, { recursive: true, force: true });
   await fs.mkdir(staging, { recursive: true });
-  await tar.x({ file: tarball, cwd: staging });
+  await tarExtract(tarball, staging);
   const manifest = HandoffManifestSchema.parse(JSON.parse(await fs.readFile(join(staging, 'manifest.json'), 'utf8')));
   // 路径一致性自校验（spec §6.1）
   const expect = getWorkspaceScopeDirName(manifest.workspacePath);
@@ -40,14 +40,21 @@ export async function unpackInput(tarball: string, staging: string): Promise<Han
   return manifest;
 }
 
-/** 还原 workspace（重建与本地一致的绝对路径）与 ~/.qwen 会话目录 */
-export async function restoreContext(staging: string, manifest: HandoffManifest): Promise<void> {
+/** 还原 workspace（重建与本地一致的绝对路径）与 ~/.qwen 会话目录；
+ *  warmBundlePath（S20）：delta 模式下先 clone warm 全量 bundle，再 fetch 输入包里的增量 bundle */
+export async function restoreContext(staging: string, manifest: HandoffManifest, warmBundlePath?: string): Promise<void> {
   const ws = manifest.workspacePath;
   await fs.rm(ws, { recursive: true, force: true });
   await fs.mkdir(ws, { recursive: true });
 
   const bundle = join(staging, 'repo.bundle');
-  if (await exists(bundle)) {
+  if (manifest.repo.deltaBase) {
+    // S20 delta：warm 全量 clone + fetch 增量；warm 缺失则明确失败（增量包不能独立还原）
+    if (!warmBundlePath || !(await exists(warmBundlePath))) throw new Error('delta bundle 缺 warm 全量基，无法还原');
+    await exec('git', ['clone', warmBundlePath, ws], { cwd: staging });
+    await exec('git', ['fetch', bundle, 'HEAD'], { cwd: ws });
+    await exec('git', ['checkout', '-B', manifest.repo.branch, 'FETCH_HEAD'], { cwd: ws });
+  } else if (await exists(bundle)) {
     await exec('git', ['clone', bundle, ws], { cwd: staging });
     await exec('git', ['checkout', manifest.repo.branch], { cwd: ws }).catch(() => undefined);
   } else {
@@ -350,20 +357,20 @@ export async function buildOutput(
   await fs.writeFile(join(workDir, 'manifest.json'), JSON.stringify(outManifest, null, 2));
 
   const tarball = join(dirname(workDir), `output-${manifest.handoffId}.tar.gz`);
-  await tar.c({ file: tarball, cwd: workDir, gzip: true }, await fs.readdir(workDir));
+  await tarCreate(tarball, workDir, await fs.readdir(workDir));
   return { tarball, manifest: outManifest };
 }
 
 // ── S19 依赖缓存：node_modules 快照跨会话复用，免重复安装 ────────────────
 /** 解压依赖缓存 tar 到工作区（包内为 node_modules/ 相对路径） */
 export async function extractDepsCache(file: string, workspacePath: string): Promise<void> {
-  await tar.x({ file, cwd: workspacePath });
+  await tarExtract(file, workspacePath);
 }
 
 /** 快照工作区 node_modules 为 tar.gz；不存在返回 false */
 export async function buildDepsCache(workspacePath: string, outPath: string): Promise<boolean> {
   if (!(await exists(join(workspacePath, 'node_modules')))) return false;
-  await tar.c({ file: outPath, cwd: workspacePath, gzip: true }, ['node_modules']);
+  await tarCreate(outPath, workspacePath, ['node_modules']);
   return true;
 }
 

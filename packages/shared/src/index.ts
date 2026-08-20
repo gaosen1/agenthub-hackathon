@@ -11,3 +11,4 @@ export * from './workspace.js';
 export * from './merge.js';
 export * from './git.js';
 export * from './pack.js';
+export * from './tartool.js';

@@ -31,6 +31,8 @@ export const RunnerLoadReqSchema = z.object({
   serveToken: z.string().optional(),
   /** S19 依赖缓存 tar.gz 的签名 GET URL（sidecar 校验通过才下发） */
   depsCacheUrl: z.string().optional(),
+  /** S20 warm 全量 bundle 的签名 GET URL（delta 模式才下发） */
+  warmBundleUrl: z.string().optional(),
 });
 export type RunnerLoadReq = z.infer<typeof RunnerLoadReqSchema>;
 
@@ -39,6 +41,9 @@ export const RunnerSnapshotReqSchema = z.object({
   /** S19 依赖缓存：node_modules 快照与 sidecar 的签名 PUT URL；缺省不缓存 */
   depsCachePutUrl: z.string().optional(),
   depsSidecarPutUrl: z.string().optional(),
+  /** S20 warm 全量 bundle 与 sidecar 的签名 PUT URL；缺省不上传 */
+  warmBundlePutUrl: z.string().optional(),
+  warmSidecarPutUrl: z.string().optional(),
 });
 export type RunnerSnapshotReq = z.infer<typeof RunnerSnapshotReqSchema>;
 

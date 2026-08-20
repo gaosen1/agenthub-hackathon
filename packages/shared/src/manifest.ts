@@ -48,6 +48,8 @@ export const HandoffManifestSchema = z.object({
     baseCommit: z.string().min(1),
     branch: z.string().min(1),
     dirty: z.boolean(),
+    /** S20 增量 bundle：delta 的基 commit（warm 全量 bundle 必含该 commit）；缺省=全量包 */
+    deltaBase: z.string().optional(),
   }),
   sessionId: z.string().min(1),
   /** 接力指令；缺省 = 交互接力 */

@@ -55,6 +55,10 @@ export const ossKeyOf = (userId: number, handoffId: string, file: 'input.tar.gz'
 export const depsCacheKeyOf = (userId: number, wsHash: string) => `handoffs/${userId}/deps/${wsHash}.tar.gz`;
 export const depsSidecarKeyOf = (userId: number, wsHash: string) => `handoffs/${userId}/deps/${wsHash}.json`;
 
+/** S20 warm 全量 bundle key：下次 push 只传 delta，Pod 集群内下载全量合成 */
+export const warmBundleKeyOf = (userId: number, wsHash: string) => `handoffs/${userId}/deps/${wsHash}.bundle`;
+export const warmSidecarKeyOf = (userId: number, wsHash: string) => `handoffs/${userId}/deps/${wsHash}.bundle.json`;
+
 /** 需要 list/head/get 等宽接口时鸭子判断；测试 Fake 只实现窄 OssSigner 则返回 undefined */
 export const asOssClient = (s: OssSigner): OssClient | undefined =>
   typeof (s as Partial<OssClient>).head === 'function' ? (s as OssClient) : undefined;

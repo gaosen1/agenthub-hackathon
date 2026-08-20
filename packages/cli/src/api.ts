@@ -66,8 +66,8 @@ export class HubClient {
     return this.request('POST', '/api/handoffs', req, (d) => CreateHandoffRespSchema.parse(d));
   }
 
-  markUploaded(id: string): Promise<{ status: string }> {
-    return this.request('POST', `/api/handoffs/${id}/uploaded`);
+  markUploaded(id: string, bundleMode?: 'full' | 'delta'): Promise<{ status: string }> {
+    return this.request('POST', `/api/handoffs/${id}/uploaded`, bundleMode ? { bundleMode } : undefined);
   }
 
   /** S21：服务端 handoff 默认策略；离线/未登录回退 null，由调用方落本地默认 */

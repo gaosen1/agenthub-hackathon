@@ -122,6 +122,11 @@ export const MIGRATIONS: Array<(db: DB) => void> = [
     const cols = (db.prepare('PRAGMA table_info(handoffs)').all() as Array<{ name: string }>).map((c) => c.name);
     if (!cols.includes('deps_lock_hash')) db.exec('ALTER TABLE handoffs ADD COLUMN deps_lock_hash TEXT');
   },
+  // 8：增量 bundle 模式（S20）：full | delta
+  (db) => {
+    const cols = (db.prepare('PRAGMA table_info(handoffs)').all() as Array<{ name: string }>).map((c) => c.name);
+    if (!cols.includes('bundle_mode')) db.exec('ALTER TABLE handoffs ADD COLUMN bundle_mode TEXT');
+  },
 ];
 
 export function migrate(db: DB): void {

@@ -32,6 +32,16 @@ export function createIncrementalBundle(repoRoot: string, bundlePath: string, ba
   return true;
 }
 
+/** S20：commit 是否为 HEAD 的祖先（增量 bundle 前提） */
+export function isAncestor(repoRoot: string, commit: string): boolean {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', commit, 'HEAD'], { cwd: repoRoot, stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** bundle → 本地仓库还原（云端 runner 用）：clone --all bundle */
 export function cloneFromBundle(bundlePath: string, targetDir: string, branch: string): void {
   execFileSync('git', ['clone', bundlePath, targetDir], { encoding: 'utf8' });

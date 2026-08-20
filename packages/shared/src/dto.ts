@@ -70,6 +70,9 @@ export const CreateHandoffRespSchema = z.object({
   handoffId: z.string(),
   uploadUrl: z.string(),
   webUrl: z.string(),
+  /** S20 增量 bundle 提示：同 wsHash 最近一次 handoff 的 base + warm 全量 bundle 是否存在 */
+  prevBase: z.string().optional(),
+  warmBundle: z.boolean().optional(),
 });
 export type CreateHandoffResp = z.infer<typeof CreateHandoffRespSchema>;
 

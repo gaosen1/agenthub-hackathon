@@ -26,7 +26,7 @@ import {
 } from '@agenthub/shared';
 import type { DB } from './db.js';
 import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
-import { ossKeyOf, assertOwnedKey, userPrefix, asOssClient, SIGNED_URL_TTL_SECONDS, type OssSigner, type OssClient } from './oss.js';
+import { ossKeyOf, assertOwnedKey, userPrefix, asOssClient, depsCacheKeyOf, depsSidecarKeyOf, warmBundleKeyOf, warmSidecarKeyOf, SIGNED_URL_TTL_SECONDS, type OssSigner, type OssClient } from './oss.js';
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
 import { getBot, getUserModelConfig, getSettings, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setSetting, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
@@ -288,11 +288,25 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       throw fail(502, 'ERR_OSS', `sign upload url failed: ${e instanceof Error ? e.message : String(e)}`);
     }
     const resp: CreateHandoffResp = { handoffId: id, uploadUrl, webUrl: `${webBaseUrl}/tasks/${id}` };
+    // S20 增量 bundle 提示：同 wsHash 最近一次有效 handoff 的 base + warm 全量 bundle sidecar 存在
+    const prev = db
+      .prepare(
+        `SELECT base_commit FROM handoffs WHERE user_id=? AND ws_hash=? AND status IN ('running','done') ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(uid, body.wsHash) as { base_commit: string } | undefined;
+    if (prev) resp.prevBase = prev.base_commit;
+    const ossHint = asOssClient(signer);
+    if (prev && ossHint?.configured) {
+      resp.warmBundle = (await ossHint.head(warmSidecarKeyOf(uid, body.wsHash)).catch(() => null)) !== null;
+    }
     return reply.status(201).send(resp);
   });
 
   app.post('/api/handoffs/:id/uploaded', async (req, reply) => {
     const h = ownHandoff(req);
+    // S20：CLI 上传完成后上报 bundle 模式（full|delta）
+    const mode = (req.body as { bundleMode?: string } | undefined)?.bundleMode;
+    if (mode === 'full' || mode === 'delta') patchHandoff(db, h.id, { bundle_mode: mode });
     setStatus(db, h, 'uploaded');
     setStatus(db, h, 'queued');
     // S12：真相时刻 head 一次落 size；head 失败不致命（不能因 OSS 抖动让上传流程失败）

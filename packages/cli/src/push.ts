@@ -5,8 +5,10 @@ import {
   appendHandoffMarker,
   computeLockHash,
   createFullBundle,
+  createIncrementalBundle,
   getRepoInfo,
   getWorkspaceScopeDirName,
+  isAncestor,
   packHandoff,
   snapshotWorktree,
 } from '@agenthub/shared';
@@ -66,6 +68,17 @@ export async function runPush(opts: PushOptions): Promise<void> {
   const created = await client.createHandoff(req);
   console.log(`✓ handoff 创建: ${created.handoffId}`);
 
+  // S20：hub 提示 warm 全量 bundle 可用且 prevBase 是本地 HEAD 祖先 → 只传增量
+  let deltaBase: string | undefined;
+  if (
+    created.warmBundle &&
+    created.prevBase &&
+    created.prevBase !== repo.headCommit &&
+    isAncestor(workspacePath, created.prevBase)
+  ) {
+    deltaBase = created.prevBase;
+  }
+
   // 2. 本地 session 末尾写 handoff_marker（§3.3），随后的拷贝自然带上
   const marker = appendHandoffMarker(sessPath, created.handoffId, repo.headCommit);
   console.log(`✓ handoff_marker 写入（前缀 ${marker.messageCount} 条）`);
@@ -74,7 +87,12 @@ export async function runPush(opts: PushOptions): Promise<void> {
   const staging = mkdtempSync(join(tmpdir(), 'agenthub-push-'));
   try {
     const bundlePath = join(staging, 'repo.bundle');
-    createFullBundle(workspacePath, bundlePath);
+    if (deltaBase) {
+      createIncrementalBundle(workspacePath, bundlePath, deltaBase);
+      console.log(`✓ 增量 bundle（base ${deltaBase.slice(0, 7)}）`);
+    } else {
+      createFullBundle(workspacePath, bundlePath);
+    }
 
     // 缺省含未跟踪文件：新写但未 git add 的文件正是接力最需要带上的。
     // 优先级（S21）：--no-include-untracked 显式关 > 本地 config > 服务端设置 > 缺省 true
@@ -102,7 +120,7 @@ export async function runPush(opts: PushOptions): Promise<void> {
       agentName,
       workspacePath,
       wsHash,
-      repo: { baseCommit: repo.headCommit, branch: repo.branch, dirty: repo.dirty },
+      repo: { baseCommit: repo.headCommit, branch: repo.branch, dirty: repo.dirty, ...(deltaBase ? { deltaBase } : {}) },
       sessionId,
       task: opts.task,
       timeoutMinutes: req.timeoutMinutes,
@@ -115,7 +133,7 @@ export async function runPush(opts: PushOptions): Promise<void> {
 
     // 4. OSS 直传 + 回执
     await uploadToSignedUrl(created.uploadUrl, tarPath);
-    await client.markUploaded(created.handoffId);
+    await client.markUploaded(created.handoffId, deltaBase ? 'delta' : 'full');
     console.log(`✓ 输入包已上传，任务入队`);
     console.log(`\nhandoff: ${created.handoffId}`);
     console.log(`web:     ${created.webUrl}`);

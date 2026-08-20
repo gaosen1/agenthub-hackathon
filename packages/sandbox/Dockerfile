@@ -7,7 +7,7 @@ FROM ${BASE_IMAGE}
 # 国内构建环境：apt/npm 走阿里与 npmmirror 源
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update && apt-get install -y --no-install-recommends \
-      git ripgrep ca-certificates procps \
+      git ripgrep ca-certificates procps tar zstd \
     && rm -rf /var/lib/apt/lists/* \
     && git config --system user.name agenthub \
     && git config --system user.email agenthub@sandbox.local

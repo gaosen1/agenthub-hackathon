@@ -184,6 +184,8 @@ describe('runner /load → /snapshot 端到端（stub qwen）', () => {
         outputUrl: `${httpBase}/output.tar.gz`,
         depsCachePutUrl: `${httpBase}/deps.tar.gz`,
         depsSidecarPutUrl: `${httpBase}/deps.json`,
+        warmBundlePutUrl: `${httpBase}/warm.bundle`,
+        warmSidecarPutUrl: `${httpBase}/warm.json`,
       },
     });
     expect(snap.statusCode).toBe(200);
@@ -196,6 +198,10 @@ describe('runner /load → /snapshot 端到端（stub qwen）', () => {
     const sidecar = JSON.parse(uploads.get('/deps.json')!.toString('utf8')) as { lockHash: string; bytes: number };
     expect(sidecar.lockHash.length).toBeGreaterThan(0);
     expect(sidecar.bytes).toBeGreaterThan(0);
+    // S20：warm 全量 bundle 与 sidecar 已上传
+    expect(uploads.get('/warm.bundle')).toBeDefined();
+    const warmMeta = JSON.parse(uploads.get('/warm.json')!.toString('utf8')) as { head: string };
+    expect(warmMeta.head.length).toBeGreaterThan(0);
 
     // 解包校验返回包结构（spec §3.1 output）
     const outDir = join(root, 'out-unpacked');
@@ -240,6 +246,70 @@ describe('runner /load → /snapshot 端到端（stub qwen）', () => {
     expect(health2.lastError).toBeUndefined();
     expect((await fs.readFile(join(manifest.workspacePath, 'node_modules', '.bin', 'jest'), 'utf8')).toString()).toBe('stub-bin');
     
+    await app.close();
+  }, 60_000);
+
+  it('S20 delta：warm 全量 bundle + 增量 bundle 合成还原', async () => {
+    // 上一个 case 留下的 workspace = 上次会话的云端状态；以其 root commit 为 delta 基
+    const ws = join(root, 'proj');
+    const prevBase = git(ws, 'rev-list', '--max-parents=0', 'HEAD');
+    const warmPath = join(root, 'warm-e2e.bundle');
+    git(ws, 'bundle', 'create', warmPath, '--all');
+    downloads.set('/warm.bundle', await fs.readFile(warmPath));
+
+    // 模拟本地新 commit（push 侧的 HEAD 前进）
+    await fs.writeFile(join(ws, 'local-new.txt'), 'local delta');
+    git(ws, 'add', '.');
+    git(ws, 'commit', '-m', 'local new');
+    const localHead = git(ws, 'rev-parse', 'HEAD');
+    const deltaPath = join(root, 'delta.bundle');
+    git(ws, 'bundle', 'create', deltaPath, `${prevBase}..HEAD`);
+
+    // 第二个输入包：repo.bundle 为增量 + manifest 带 deltaBase
+    const pkg2 = join(root, 'input-pkg2');
+    await fs.mkdir(pkg2, { recursive: true });
+    const manifest2: HandoffManifest = {
+      version: 1,
+      handoffId: 'hf-e2e002',
+      direction: 'push',
+      agentName: 'proj',
+      workspacePath: ws,
+      wsHash: getWorkspaceScopeDirName(ws),
+      repo: { baseCommit: localHead, branch: 'main', dirty: false, deltaBase: prevBase },
+      sessionId: 'sess-e2e-2',
+      timeoutMinutes: 30,
+      qwenVersion: 'stub',
+      createdAt: new Date().toISOString(),
+    };
+    await fs.writeFile(join(pkg2, 'manifest.json'), JSON.stringify(manifest2));
+    await fs.copyFile(deltaPath, join(pkg2, 'repo.bundle'));
+    const tarball2 = join(root, 'input2.tar.gz');
+    await tar.c({ file: tarball2, cwd: pkg2, gzip: true }, await fs.readdir(pkg2));
+    downloads.set('/input2.tar.gz', await fs.readFile(tarball2));
+
+    const { buildRunner } = await import('./runner.js');
+    const app = buildRunner();
+    const load = await app.inject({
+      method: 'POST',
+      url: '/load',
+      payload: { inputUrl: `${httpBase}/input2.tar.gz`, warmBundleUrl: `${httpBase}/warm.bundle` },
+    });
+    expect(load.statusCode).toBe(202);
+    const deadline = Date.now() + 30_000;
+    let health: { serveReady: boolean; lastError?: string } = { serveReady: false };
+    while (Date.now() < deadline) {
+      const res = await app.inject({ method: 'GET', url: '/healthz' });
+      health = res.json() as typeof health;
+      if (health.serveReady || health.lastError) break;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    expect(health.lastError).toBeUndefined();
+    // 合成结果：warm 的历史（cloud-work）+ 本地增量（local new），HEAD 落在本地 head
+    expect((await fs.readFile(join(ws, 'local-new.txt'), 'utf8')).toString()).toBe('local delta');
+    const log = git(ws, 'log', '--oneline');
+    expect(log).toContain('cloud-work');
+    expect(log).toContain('local new');
+    expect(git(ws, 'rev-parse', 'HEAD')).toBe(localHead);
     await app.close();
   }, 60_000);
 });

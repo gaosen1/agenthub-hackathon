@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import * as tar from 'tar';
+import { tarCreate, tarExtract } from './tartool.js';
 import { HandoffManifestSchema } from './manifest.js';
 import type { HandoffManifest } from './manifest.js';
 
@@ -57,7 +57,7 @@ export async function packHandoff(input: PackInput, outPath: string): Promise<vo
     if (input.qwenHomeDir) cpSync(input.qwenHomeDir, join(staging, 'qwen-home'), { recursive: true });
     if (input.logsDir) cpSync(input.logsDir, join(staging, 'logs'), { recursive: true });
 
-    await tar.create({ gzip: true, file: outPath, cwd: staging, portable: true }, ['.']);
+    await tarCreate(outPath, staging, ['.']);
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
@@ -76,7 +76,7 @@ export interface UnpackResult {
 /** 解包到 targetDir 并校验 manifest */
 export async function unpackHandoff(tarPath: string, targetDir: string): Promise<UnpackResult> {
   mkdirSync(targetDir, { recursive: true });
-  await tar.extract({ file: tarPath, cwd: targetDir });
+  await tarExtract(tarPath, targetDir);
 
   const manifestPath = join(targetDir, 'manifest.json');
   if (!existsSync(manifestPath)) throw new Error(`包内缺少 manifest.json: ${tarPath}`);
