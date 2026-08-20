@@ -43,6 +43,7 @@ export function useDataSource(): DataSource {
 
 const TOKEN_KEY = 'agenthub_token';
 export const getToken = (): string | null => localStorage.getItem(TOKEN_KEY);
+export const saveToken = (t: string): void => localStorage.setItem(TOKEN_KEY, t);
 export const clearToken = (): void => localStorage.removeItem(TOKEN_KEY);
 
 export class AuthRequiredError extends Error {
