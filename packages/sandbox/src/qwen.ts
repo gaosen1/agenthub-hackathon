@@ -34,9 +34,9 @@ export async function startServe(spec: ServeSpec): Promise<void> {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  // qwen 常规日志走 stderr 是 Node CLI 惯例，不代表错误；两流统一前缀，级别由 kind 表达
   serveProc.stdout?.on('data', (d: Buffer) => appendLog('info', `[serve] ${d.toString().trim()}`.slice(0, 500)));
-  // qwen 的常规日志走 stderr，前缀用 :stderr 标明流名而非错误级别，避免误读为报错
-  serveProc.stderr?.on('data', (d: Buffer) => appendLog('info', `[serve:stderr] ${d.toString().trim()}`.slice(0, 500)));
+  serveProc.stderr?.on('data', (d: Buffer) => appendLog('info', `[serve] ${d.toString().trim()}`.slice(0, 500)));
   serveProc.on('exit', (code) => appendLog('sys', `qwen serve exited (${code})`));
 }
 
@@ -94,7 +94,7 @@ export async function runTask(workspacePath: string, sessionId: string, task: st
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     proc.stdout?.on('data', (d: Buffer) => appendLog('info', `[task] ${d.toString().trim()}`.slice(0, 500)));
-    proc.stderr?.on('data', (d: Buffer) => appendLog('info', `[task:stderr] ${d.toString().trim()}`.slice(0, 500)));
+    proc.stderr?.on('data', (d: Buffer) => appendLog('info', `[task] ${d.toString().trim()}`.slice(0, 500)));
     proc.on('exit', (code) => resolve(code ?? 1));
     proc.on('error', () => resolve(1));
   });
