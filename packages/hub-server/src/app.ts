@@ -754,8 +754,10 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ msgtype: 'text', text: 'AgentHub webhook 连通性测试' }),
     }).catch(() => null);
-    if (!res || !res.ok) {
-      throw fail(502, 'ERR_WEBHOOK', `webhook test failed${res ? `: HTTP ${res.status}` : ': network error'}`);
+    // 钉钉即使 token 无效也回 HTTP 200，必须校验 errcode，否则假阳性
+    const respBody = (await res?.json().catch(() => undefined)) as { errcode?: number; errmsg?: string } | undefined;
+    if (!res || !res.ok || (typeof respBody?.errcode === 'number' && respBody.errcode !== 0)) {
+      throw fail(502, 'ERR_WEBHOOK', `webhook test failed: ${respBody?.errmsg ?? `HTTP ${res?.status ?? 'network error'}`}`);
     }
     return { ok: true };
   });
