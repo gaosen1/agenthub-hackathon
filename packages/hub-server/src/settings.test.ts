@@ -4,6 +4,7 @@
  * - token 轮换后旧 token 立刻 401，新 token 200；不接受 tv ?? 1 兜底。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createServer, type Server } from 'node:http';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from './app.js';
 import { openDb, type DB } from './db.js';
@@ -91,5 +92,37 @@ describe('S17 token 轮换真失效', () => {
 
     expect((await app.inject({ method: 'GET', url: '/api/settings', headers: { authorization: `Bearer ${first.token}` } })).statusCode).toBe(401);
     expect((await app.inject({ method: 'GET', url: '/api/settings', headers: auth() })).statusCode).toBe(200);
+  });
+});
+
+describe('S19 webhook 连通性测试端点', () => {
+  let hookServer: Server;
+  let hookUrl: string;
+  let hookErrcode = 0;
+
+  beforeEach(async () => {
+    hookErrcode = 0;
+    hookServer = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ errcode: hookErrcode, errmsg: hookErrcode ? 'token is not exist' : 'ok' }));
+    });
+    await new Promise<void>((r) => hookServer.listen(0, '127.0.0.1', r));
+    hookUrl = `http://127.0.0.1:${(hookServer.address() as { port: number }).port}/robot/send?access_token=t`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((r) => hookServer.close(() => r()));
+  });
+
+  it('钉钉回 HTTP 200 但 errcode!=0 时判失败（不假阳性）', async () => {
+    hookErrcode = 300001;
+    const res = await app.inject({ method: 'POST', url: '/api/settings/webhook/test', headers: auth(), payload: { url: hookUrl } });
+    expect(res.statusCode).toBe(502);
+    expect(res.body).toContain('token is not exist');
+  });
+
+  it('errcode=0 判成功', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/settings/webhook/test', headers: auth(), payload: { url: hookUrl } });
+    expect(res.statusCode).toBe(200);
   });
 });

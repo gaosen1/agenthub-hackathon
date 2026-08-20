@@ -68,6 +68,10 @@ export class Notifier {
         markdown: { title, text: `**${title}**\n\n- handoff: ${r.handoff_id}\n- 时间: ${r.at}` },
       }),
     });
-    if (!res.ok) throw new Error(`webhook responded ${res.status}`);
+    // 钉钉 token 无效也回 HTTP 200，必须校验 errcode，否则静默失败还推进游标
+    const body = (await res.json().catch(() => undefined)) as { errcode?: number } | undefined;
+    if (!res.ok || (typeof body?.errcode === 'number' && body.errcode !== 0)) {
+      throw new Error(`webhook responded ${res.status}${body?.errcode ? ` errcode=${body.errcode}` : ''}`);
+    }
   }
 }
