@@ -20,6 +20,7 @@ temp/
 coverage/
 .nyc_output/
 ops/state/
+packages/hub-server/data/
 
 # Local environment and secrets
 .env
