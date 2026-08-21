@@ -11,6 +11,7 @@ import { execFile as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, computeLockHash, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
 import { allLogs, appendLog, logsAfter, state } from './state.js';
+import { codeServerInstalled, ensureIde, ideStatus } from './ide.js';
 import { runTask, startServe, stopServe, waitServeReady } from './qwen.js';
 import {
   buildDepsCache,
@@ -348,6 +349,20 @@ export function buildRunner(): FastifyInstance {
     const after = Number((req.query as { after?: string }).after ?? 0) || 0;
     return reply.send(logsAfter(after));
   });
+
+  // Web IDE：按需从 NAS 共享层拉起 code-server（:8082）打开当前工作区，幂等
+  app.post('/ide/ensure', async (_req, reply) => {
+    const ws = manifest?.workspacePath ?? botWorkspace?.workspacePath;
+    if (!ws) return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'no workspace loaded' } });
+    if (!codeServerInstalled()) {
+      return reply.status(409).send({ error: { code: 'ERR_NOT_READY', message: 'code-server not preinstalled on shared layer' } });
+    }
+    const st = await ensureIde(ws);
+    if (!st.ready) return reply.status(502).send({ error: { code: 'ERR_RUNNER', message: st.error ?? 'code-server start failed' } });
+    return reply.send(st);
+  });
+
+  app.get('/ide/status', async () => ideStatus());
 
   return app;
 }

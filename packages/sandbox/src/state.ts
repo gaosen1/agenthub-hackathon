@@ -7,6 +7,8 @@ export interface RunnerState {
   mode: 'web' | 'bot';
   serveReady: boolean;
   taskDone: boolean;
+  /** Web IDE（code-server）是否已就绪，进程句柄在 ide.ts */
+  ideReady: boolean;
   loadedHandoffId?: string;
   lastError?: string;
   loading: boolean;
@@ -16,6 +18,7 @@ export const state: RunnerState = {
   mode: (process.env.RUNNER_MODE === 'bot' ? 'bot' : 'web'),
   serveReady: false,
   taskDone: false,
+  ideReady: false,
   loading: false,
 };
 
