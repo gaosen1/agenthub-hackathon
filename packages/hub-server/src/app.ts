@@ -2,7 +2,7 @@
  * hub-server 应用工厂（spec §4.2）
  * buildApp 注入 db/signer/sandbox 依赖以便测试；index.ts 负责生产装配。
  */
-import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
@@ -26,13 +26,14 @@ import {
   type SandboxPolicy,
 } from '@agenthub/shared';
 import type { DB } from './db.js';
-import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
+import { hashPassword, signJwt, verifyJwt, verifyPassword, type JwtPayload } from './auth.js';
 import { ossKeyOf, assertOwnedKey, userPrefix, asOssClient, depsCacheKeyOf, depsSidecarKeyOf, warmBundleKeyOf, warmSidecarKeyOf, SIGNED_URL_TTL_SECONDS, type OssSigner, type OssClient } from './oss.js';
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
 import { getBot, getUserModelConfig, getSettings, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setSetting, setHandoffArchived, deleteHandoffRow, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
 import { userModelSecret } from './db.js';
-import { RunnerClient } from './runner-client.js';
+import { RunnerClient, RunnerError } from './runner-client.js';
+import { IDE_COOKIE, IDE_COOKIE_TTL_SECONDS, parseCookies, pipeHttp, pipeUpgrade, verifyIdeToken } from './ide-proxy.js';
 import type { SandboxConnector } from './connector.js';
 import { SANDBOX_PORTS, SANDBOX_RESOURCES, SANDBOX_TEMPLATE, sandboxImage, type PodOrchestrator } from './k8s.js';
 import { DEFAULT_ORPHAN_INTERVAL_MS, DEFAULT_WORKER_INTERVAL_MS, type Worker } from './worker.js';
@@ -499,6 +500,93 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         .finally(() => raw.end());
       raw.on('close', () => void reader.cancel().catch(() => undefined));
     },
+  });
+
+  // ── Web IDE（code-server）代理：/api/handoffs/:id/ide/* → Pod :8082 ──
+  const ideGate = (req: FastifyRequest): HandoffRow => {
+    const h = ownHandoff(req);
+    if (h.kind !== 'web') throw fail(409, 'ERR_NOT_READY', 'IDE only for kind=web');
+    if (h.status !== 'running') throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
+    if (!h.pod_name) throw fail(409, 'ERR_NOT_READY', 'sandbox not provisioned');
+    return h;
+  };
+
+  const ideUpstreamBase = (h: HandoffRow): Promise<string> => {
+    const sb = needSandbox();
+    return sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name! }, SANDBOX_PORTS.ide);
+  };
+
+  const tvOf = (uid: number): number | undefined =>
+    (db.prepare('SELECT token_version FROM users WHERE id=?').get(uid) as { token_version: number } | undefined)?.token_version;
+
+  /** 拉起 code-server 并下发 IDE Cookie：iframe 无法附加 Authorization 头，后续代理请求靠它鉴权 */
+  app.post('/api/handoffs/:id/ide/ensure', async (req, reply) => {
+    const { uid } = requireAuth(req);
+    const h = ideGate(req);
+    const sb = needSandbox();
+    const runnerBase = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name! }, SANDBOX_PORTS.runner);
+    try {
+      const st = await new RunnerClient(runnerBase, h.runner_token).ensureIde();
+      patchHandoff(db, h.id, { last_active_at: nowIso() });
+      const payload = { uid, sub: 'ide', tv: tvOf(uid), hid: h.id } as unknown as Omit<JwtPayload, 'iat' | 'exp'>;
+      const cookieTok = signJwt(payload, secret, IDE_COOKIE_TTL_SECONDS);
+      reply.header('set-cookie', `${IDE_COOKIE}=${cookieTok}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${IDE_COOKIE_TTL_SECONDS}`);
+      return reply.send(st);
+    } catch (e) {
+      if (e instanceof RunnerError && e.status === 409) throw fail(409, 'ERR_NOT_READY', e.message);
+      throw fail(502, 'ERR_RUNNER', `ide ensure failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  const ideProxyHandler = async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const id = (req.params as { id: string }).id;
+    const uid = verifyIdeToken(req.headers, secret, tvOf);
+    if (uid === null) throw fail(401, 'ERR_AUTH', 'missing or invalid IDE credentials');
+    const row = db.prepare('SELECT * FROM handoffs WHERE id=?').get(id) as HandoffRow | undefined;
+    if (!row || row.user_id !== uid) throw fail(403, 'ERR_FORBIDDEN', 'no such handoff');
+    if (row.kind !== 'web' || row.status !== 'running' || !row.pod_name) throw fail(409, 'ERR_NOT_READY', `handoff is ${row.status}`);
+    patchHandoff(db, row.id, { last_active_at: nowIso() });
+    const prefix = `/api/handoffs/${row.id}/ide`;
+    const upstreamPath = req.url.startsWith(prefix) ? req.url.slice(prefix.length) || '/' : req.url;
+    reply.hijack();
+    pipeHttp(req.raw, reply.raw, await ideUpstreamBase(row), upstreamPath, prefix);
+  };
+
+  app.route({ method: ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'PATCH'], url: '/api/handoffs/:id/ide', handler: ideProxyHandler });
+  app.route({ method: ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'PATCH'], url: '/api/handoffs/:id/ide/*', handler: ideProxyHandler });
+
+  // WebSocket upgrade（code-server 终端/重连）：fastify 路由不处理 upgrade，在 server 层接管
+  app.server.on('upgrade', (req, socket, head) => {
+    const m = /^\/api\/handoffs\/([^/]+)\/ide(\/.*)?$/.exec(req.url ?? '');
+    if (!m) return;
+    const id = m[1]!;
+    void (async () => {
+      try {
+        if (!sandbox) throw new Error('sandbox not configured');
+        const uid = verifyIdeToken(req.headers, secret, tvOf);
+        if (uid === null) throw new Error('unauthorized');
+        const row = db.prepare('SELECT * FROM handoffs WHERE id=?').get(id) as HandoffRow | undefined;
+        if (!row || row.user_id !== uid || row.kind !== 'web' || row.status !== 'running' || !row.pod_name) throw new Error('not ready');
+        pipeUpgrade(req.headers, socket, head, await ideUpstreamBase(row), m[2] || '/');
+      } catch {
+        socket.destroy();
+      }
+    })();
+  });
+
+  // 子路径兜底：code-server 无 base-path 能力，运行时根绝对请求（/login、/static/* 等）
+  // 带着活跃 IDE Cookie 到达 Hub 根时，302 回带前缀路径；handoff 失效则不重定向避免死循环
+  app.addHook('onRequest', async (req, reply) => {
+    if (!/^\/(login|static|out|favicon\.ico)([/?#]|$)/.test(req.url)) return;
+    const tok = parseCookies(typeof req.headers.cookie === 'string' ? req.headers.cookie : undefined)[IDE_COOKIE];
+    if (!tok) return;
+    const payload = verifyJwt(tok, secret) as (JwtPayload & { hid?: string }) | null;
+    if (!payload?.hid) return;
+    const row = db.prepare('SELECT user_id, status, kind FROM handoffs WHERE id=?').get(payload.hid) as
+      | { user_id: number; status: string; kind: string }
+      | undefined;
+    if (!row || row.user_id !== payload.uid || row.status !== 'running' || row.kind !== 'web') return;
+    return reply.redirect(`/api/handoffs/${payload.hid}/ide${req.url}`);
   });
 
   // ── Bots（spec §4.2）──────────────────────────────────

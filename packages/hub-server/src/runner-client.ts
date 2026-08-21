@@ -1,7 +1,7 @@
 /**
  * runner 控制面客户端（spec §4.3），Worker/API 经 SandboxConnector 调用
  */
-import type { ChatListItem, HandoffManifest, RunnerHealthzResp, RunnerLoadReq, RunnerSnapshotReq, RunnerBindReq, SandboxEvent } from '@agenthub/shared';
+import type { ChatListItem, HandoffManifest, RunnerHealthzResp, RunnerIdeStatusResp, RunnerLoadReq, RunnerSnapshotReq, RunnerBindReq, SandboxEvent } from '@agenthub/shared';
 
 export class RunnerError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -53,5 +53,13 @@ export class RunnerClient {
 
   logs(after: number): Promise<{ items: SandboxEvent[]; nextAfter: number }> {
     return this.call('GET', `/logs?after=${after}`);
+  }
+
+  ensureIde(): Promise<RunnerIdeStatusResp> {
+    return this.call('POST', '/ide/ensure');
+  }
+
+  ideStatus(): Promise<RunnerIdeStatusResp> {
+    return this.call('GET', '/ide/status');
   }
 }
