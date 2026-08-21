@@ -94,12 +94,12 @@ export async function runTask(workspacePath: string, sessionId: string, task: st
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     // 按行缓冲 stdout/stderr：chunk 边界任意，直接切片会把回答拦腰截断（web 卡片不完整事故）；
-    // 单行上限 2000，退出时 flush 残余
+    // 单行上限 20000 仅是防病理单行（几 MB 单行 JSON/base64）撑爆日志库的防御阀，正常回复无感；退出时 flush 残余
     const mkLineLogger = (prefix: string) => {
       let buf = '';
       const push = (line: string) => {
         const t = line.trim();
-        if (t) appendLog('info', `${prefix} ${t}`.slice(0, 2000));
+        if (t) appendLog('info', `${prefix} ${t}`.slice(0, 20000));
       };
       return {
         data: (d: Buffer) => {
