@@ -116,7 +116,12 @@ export class K8sOrchestrator implements PodOrchestrator {
             image: this.cfg.image,
             imagePullPolicy: 'IfNotPresent',
             ports: [{ containerPort: SANDBOX_PORTS.runner }, { containerPort: SANDBOX_PORTS.serve }],
-            env: Object.entries({ RUNNER_MODE: spec.mode, ...spec.env }).map(([name, value]) => ({ name, value })),
+            env: Object.entries({
+              RUNNER_MODE: spec.mode,
+              // 云端无人值守必用 yolo；静音 qwen 启动警告，避免它混入会话首条输出
+              QWEN_CODE_SUPPRESS_YOLO_WARNING: '1',
+              ...spec.env,
+            }).map(([name, value]) => ({ name, value })),
             envFrom: spec.secretRefs.map((name) => ({ secretRef: { name, optional: true } })),
             resources: {
               requests: { ...SANDBOX_RESOURCES },
@@ -196,7 +201,12 @@ export class K8sOrchestrator implements PodOrchestrator {
                 imagePullPolicy: 'IfNotPresent',
                 ports: [{ containerPort: SANDBOX_PORTS.runner }, { containerPort: SANDBOX_PORTS.serve }],
                 ...(overlay ? { command: overlay.command, args: overlay.args, volumeMounts: overlay.volumeMounts } : {}),
-                env: Object.entries({ RUNNER_MODE: spec.mode, ...spec.env }).map(([name, value]) => ({ name, value })),
+                env: Object.entries({
+                  RUNNER_MODE: spec.mode,
+                  // 云端无人值守必用 yolo；静音 qwen 启动警告，避免它混入会话首条输出
+                  QWEN_CODE_SUPPRESS_YOLO_WARNING: '1',
+                  ...spec.env,
+                }).map(([name, value]) => ({ name, value })),
                 envFrom: spec.secretRefs.map((name) => ({ secretRef: { name, optional: true } })),
                 resources: {
                   requests: { ...SANDBOX_RESOURCES },
