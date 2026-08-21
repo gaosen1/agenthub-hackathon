@@ -56,6 +56,8 @@ export class Worker {
   private orphanIntervalMs = DEFAULT_ORPHAN_INTERVAL_MS;
   /** runner 日志搬运游标（handoffId → nextAfter） */
   private readonly logCursors = new Map<string, number>();
+  /** provision 瞬断重试计数（EBADF 等间歇网络错误不一次判死，与 hf-f4da72 同策略） */
+  private readonly provisionRetries = new Map<string, number>();
 
   constructor(
     private readonly db: DB,
@@ -195,10 +197,21 @@ export class Worker {
           labels: { 'agenthub/kind': 'web', 'agenthub/owner': String(h.user_id), 'agenthub/handoff': h.id },
         });
         patchHandoff(this.db, h.id, { pod_name: podName, serve_token: serveToken, runner_token: runnerToken });
+        this.provisionRetries.delete(h.id);
         setStatus(this.db, h, 'provisioning');
       } catch (e) {
-        recordSandboxReclaim(this.db, podName, 'failed', 'pod-failed', `provision failed: ${msg(e)}`);
-        setStatus(this.db, h, 'failed', `provision failed: ${msg(e)}`);
+        // 间歇网络错误（本机 node 对 API server 偶发 EBADF）：保留 queued 下轮重试，上限 5 次
+        const m = msg(e);
+        const transient = /EBADF|ECONN|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EAI_AGAIN|socket hang up/i.test(m);
+        const n = (this.provisionRetries.get(h.id) ?? 0) + 1;
+        if (transient && n <= 5) {
+          this.provisionRetries.set(h.id, n);
+          recordEvent(this.db, h.id, 'log', JSON.stringify({ t: nowIso(), tag: 'sys', c: `provision transient error (${n}/5), retrying: ${m.slice(0, 120)}` }));
+          continue;
+        }
+        this.provisionRetries.delete(h.id);
+        recordSandboxReclaim(this.db, podName, 'failed', 'pod-failed', `provision failed: ${m}`);
+        setStatus(this.db, h, 'failed', `provision failed: ${m}`);
       }
     }
   }
