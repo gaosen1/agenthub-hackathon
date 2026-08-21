@@ -79,4 +79,11 @@ describe('路由外壳', () => {
     expect(await screen.findByRole('heading', { name: title })).toBeInTheDocument();
     expect(pathname()).toBe(path);
   });
+
+  it('/tasks/:id/ide 渲染全屏 IDE 视图（Hub 不可达时落错误态）', async () => {
+    const target = mockSummaries[0]!.id;
+    mount(`/tasks/${target}/ide`);
+    expect(await screen.findByText(/IDE 不可用/)).toBeInTheDocument();
+    expect(pathname()).toBe(`/tasks/${target}/ide`);
+  });
 });

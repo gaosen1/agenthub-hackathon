@@ -4,6 +4,7 @@ import { TasksView } from './views/TasksView.js';
 import { SandboxView } from './views/SandboxView.js';
 import { OssView } from './views/OssView.js';
 import { SettingsView } from './views/SettingsView.js';
+import { IdeView } from './views/IdeView.js';
 
 /**
  * 路由表。`/tasks/:id` 是对外契约——hub-server 创建 handoff 时返回的
@@ -11,6 +12,8 @@ import { SettingsView } from './views/SettingsView.js';
  * index.html，所以链接打得开但渲染的是错误的任务）。这里让它真正生效。
  */
 export const routes: RouteObject[] = [
+  // Web IDE 全屏视图：不进 AppShell，独占整个视口
+  { path: '/tasks/:id/ide', element: <IdeView /> },
   {
     element: <AppShell />,
     children: [

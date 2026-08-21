@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import type { HandoffDetail, SandboxEvent } from '@agenthub/shared/contracts';
 import { STEPS, TERMINAL_BAD, fmtTime, stepIndexOf } from '../statusMeta.js';
 import { cancelHandoff, finishHandoff, useDataSource } from '../api/client.js';
@@ -88,6 +89,11 @@ export function TaskDetail({ detail: t, onOpenPull }: Props) {
           </div>
         </div>
         <div className="d-actions">
+          {t.status === 'running' && t.kind === 'web' && dataSource === 'hub' && (
+            <Link className="btn" to={`/tasks/${t.id}/ide`} title="打开云端工作区的 Web IDE（code-server）">
+              <i className="fa-solid fa-code" /> 打开 IDE
+            </Link>
+          )}
           {t.status === 'running' && dataSource === 'hub' && (
             <button className="btn" onClick={() => void finishHandoff(t.id)} title="触发 packaging，打包后可 pull">
               <i className="fa-solid fa-flag-checkered" /> 结束会话并打包

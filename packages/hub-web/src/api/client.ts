@@ -11,8 +11,9 @@ import {
   HandoffDetailSchema,
   HandoffEventsRespSchema,
   ListHandoffsRespSchema,
+  RunnerIdeStatusRespSchema,
 } from '@agenthub/shared/contracts';
-import type { AuthResp, Bot, HandoffDetail, HandoffEventsResp, ListHandoffsResp } from '@agenthub/shared/contracts';
+import type { AuthResp, Bot, HandoffDetail, HandoffEventsResp, ListHandoffsResp, RunnerIdeStatusResp } from '@agenthub/shared/contracts';
 import { useSyncExternalStore } from 'react';
 import { mockDetails, mockSummaries } from './mock.js';
 
@@ -151,6 +152,16 @@ export async function finishHandoff(id: string): Promise<void> {
   if (t) headers['authorization'] = `Bearer ${t}`;
   await fetch(`/api/handoffs/${id}/pull-intent`, { method: 'POST', headers }).catch(() => undefined);
 }
+
+// ---------- Web IDE (code-server) ----------
+
+/** 拉起沙箱内的 code-server；成功后服务端下发 IDE Cookie，iframe 代理请求靠它鉴权 */
+export async function ensureIde(handoffId: string): Promise<RunnerIdeStatusResp> {
+  return hubFetch(`/api/handoffs/${handoffId}/ide/ensure`, (d) => RunnerIdeStatusRespSchema.parse(d), { method: 'POST' });
+}
+
+/** IDE iframe 入口：代理路径前缀，Cookie 随同源请求自动携带 */
+export const ideProxyUrl = (handoffId: string): string => `/api/handoffs/${handoffId}/ide/`;
 
 // ---------- model config (per-user) ----------
 
