@@ -62,10 +62,14 @@ if (args[0] === 'serve') {
         else if (m.method === 'session/load') reply({ modes: { currentModeId: 'auto', availableModes: [{ id: 'auto' }, { id: 'yolo' }] } });
         else if (m.method === 'session/set_mode') reply({});
         else if (m.method === 'session/prompt') {
-          send({ sessionUpdate: 'agent_message_chunk', content: { text: 'cloud line one\\n' } });
-          send({ sessionUpdate: 'agent_message_chunk', content: { text: 'cloud line two\\n' } });
           try { execFileSync('git', ['-c','user.name=cloud','-c','user.email=c@c','commit','--allow-empty','-m','cloud-work'], { cwd: process.cwd() }); } catch (e) {}
-          setTimeout(() => reply({ stopReason: 'end_turn' }), 50);
+          // 真 serve 协议：prompt 先 202，流式帧与最终应答帧都走 SSE
+          s.writeHead(202); s.end();
+          setTimeout(() => {
+            send({ sessionUpdate: 'agent_message_chunk', content: { text: 'cloud line one\\n' } });
+            send({ sessionUpdate: 'agent_message_chunk', content: { text: 'cloud line two\\n' } });
+            if (sseRes) sseRes.write('data: ' + JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }) + '\\n\\n');
+          }, 60);
         } else reply({});
       });
       return;
