@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { ZodError } from 'zod';
 import {
   AuthReqSchema,
+  ArchiveReqSchema,
   BindChatReqSchema,
   CreateBotReqSchema,
   CreateHandoffReqSchema,
@@ -29,7 +30,7 @@ import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
 import { ossKeyOf, assertOwnedKey, userPrefix, asOssClient, depsCacheKeyOf, depsSidecarKeyOf, warmBundleKeyOf, warmSidecarKeyOf, SIGNED_URL_TTL_SECONDS, type OssSigner, type OssClient } from './oss.js';
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
-import { getBot, getUserModelConfig, getSettings, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setSetting, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
+import { getBot, getUserModelConfig, getSettings, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setSetting, setHandoffArchived, deleteHandoffRow, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
 import { userModelSecret } from './db.js';
 import { RunnerClient } from './runner-client.js';
 import type { SandboxConnector } from './connector.js';
@@ -221,6 +222,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     // Web 端 ChatPanel 依赖 workspacePath 作为 ACP session/load 的 cwd；缺失会导致聊天永远“连接中”
     ...(h.workspace_path ? { workspacePath: h.workspace_path } : {}),
     ...(h.task ? { task: h.task } : {}),
+    archived: h.archived === 1,
     createdAt: h.created_at,
     updatedAt: h.updated_at,
   });
@@ -350,16 +352,17 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
   app.get('/api/handoffs', async (req, reply) => {
     const { uid } = requireAuth(req);
-    const q = req.query as { agentName?: string; status?: string; limit?: string };
+    const q = req.query as { agentName?: string; status?: string; limit?: string; archived?: string };
     const limit = Math.min(Number(q.limit ?? 50) || 50, 200);
+    const archived = q.archived === '1' ? 1 : 0;
     const rows = db
       .prepare(
-        `SELECT * FROM handoffs WHERE user_id=@uid
+        `SELECT * FROM handoffs WHERE user_id=@uid AND archived=@archived
          AND (@agent IS NULL OR agent_name=@agent)
          AND (@status IS NULL OR status=@status)
          ORDER BY created_at DESC LIMIT @limit`,
       )
-      .all({ uid, agent: q.agentName ?? null, status: q.status ?? null, limit }) as HandoffRow[];
+      .all({ uid, archived, agent: q.agentName ?? null, status: q.status ?? null, limit }) as HandoffRow[];
     return reply.send({ items: rows.map(toSummary) });
   });
 
@@ -370,6 +373,33 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       .prepare('SELECT id, at, kind, payload FROM handoff_events WHERE handoff_id=? AND id>? ORDER BY id LIMIT 500')
       .all(h.id, after) as Array<{ id: number; at: string; kind: string; payload: string }>;
     return reply.send({ items: rows, nextAfter: rows.length ? rows[rows.length - 1]!.id : after });
+  });
+
+  // ── 列表面板归档/删除：仅终态允许（非终态还被 worker/Pod 引用，隐藏或删掉会造孤儿）──
+  app.post('/api/handoffs/:id/archive', async (req) => {
+    const h = ownHandoff(req);
+    const { archived } = ArchiveReqSchema.parse(req.body ?? {});
+    if (!TERMINAL_STATUSES.includes(h.status)) {
+      throw fail(409, 'ERR_STATE', `handoff is ${h.status}, cancel first`);
+    }
+    setHandoffArchived(db, h.id, archived);
+    return { ok: true, archived };
+  });
+
+  app.delete('/api/handoffs/:id', async (req, reply) => {
+    const h = ownHandoff(req);
+    if (!TERMINAL_STATUSES.includes(h.status)) {
+      throw fail(409, 'ERR_STATE', `handoff is ${h.status}, cancel first`);
+    }
+    // OSS 对象 best-effort 清理：失败不阻断删除（与 head 失败不致命同风格）
+    const oss = asOssClient(signer);
+    if (oss?.configured) {
+      for (const key of [h.input_oss_key, h.output_oss_key]) {
+        if (key) await oss.deleteObject(key).catch(() => undefined);
+      }
+    }
+    deleteHandoffRow(db, h.id);
+    return reply.status(204).send();
   });
 
   app.post('/api/handoffs/:id/cancel', async (req, reply) => {

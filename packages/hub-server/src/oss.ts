@@ -45,6 +45,8 @@ export interface OssClient extends OssSigner {
   head(key: string): Promise<OssObject | null>;
   /** 读取小对象内容（sidecar 等）；404 返回 null */
   get(key: string): Promise<Buffer | null>;
+  /** 删除对象（handoff 删除时 best-effort 清理）；404 视为成功 */
+  deleteObject(key: string): Promise<void>;
   bucketInfo(): Promise<BucketInfo | null>;
 }
 
@@ -84,6 +86,9 @@ class NullOssClient implements OssClient {
   }
   async signGet(): Promise<string> {
     throw fail(503, 'ERR_OSS', 'oss not configured');
+  }
+  async deleteObject(): Promise<void> {
+    // 未配置即无对象可删：best-effort 语义下静默成功
   }
   async list() {
     return { objects: [], truncated: false };
@@ -199,6 +204,15 @@ class AliOssClient implements OssClient {
     } catch (e) {
       if ((e as { status?: number }).status === 404) return null;
       throw fail(502, 'ERR_OSS', `oss get failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  async deleteObject(key: string): Promise<void> {
+    try {
+      await this.client.delete(key);
+    } catch (e) {
+      if ((e as { status?: number }).status === 404) return;
+      throw fail(502, 'ERR_OSS', `oss delete failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

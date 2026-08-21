@@ -88,6 +88,8 @@ export const HandoffSummarySchema = z.object({
   /** 本地绝对路径；Web 端 ACP session/load 的 cwd 参数需要（spec §4.4） */
   workspacePath: z.string().optional(),
   task: z.string().optional(),
+  /** 列表面板归档标记（默认列表隐藏，?archived=1 视图显示） */
+  archived: z.boolean().default(false),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -166,6 +168,10 @@ export const BindChatReqSchema = z.object({
   sessionId: z.string().min(1),
 });
 export type BindChatReq = z.infer<typeof BindChatReqSchema>;
+
+/** 列表面板归档/取消归档（仅终态 handoff 允许） */
+export const ArchiveReqSchema = z.object({ archived: z.boolean() });
+export type ArchiveReq = z.infer<typeof ArchiveReqSchema>;
 
 // ---------- Sandbox 面板（原型 §view-sandbox） ----------
 

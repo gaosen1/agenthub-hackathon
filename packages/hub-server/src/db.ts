@@ -127,6 +127,11 @@ export const MIGRATIONS: Array<(db: DB) => void> = [
     const cols = (db.prepare('PRAGMA table_info(handoffs)').all() as Array<{ name: string }>).map((c) => c.name);
     if (!cols.includes('bundle_mode')) db.exec('ALTER TABLE handoffs ADD COLUMN bundle_mode TEXT');
   },
+  // 9：handoff 归档标记（列表面板归档/删除功能）
+  (db) => {
+    const cols = (db.prepare('PRAGMA table_info(handoffs)').all() as Array<{ name: string }>).map((c) => c.name);
+    if (!cols.includes('archived')) db.exec('ALTER TABLE handoffs ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+  },
 ];
 
 export function migrate(db: DB): void {

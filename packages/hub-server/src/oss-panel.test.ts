@@ -23,6 +23,9 @@ class FakeOss implements OssClient {
   async list(prefix: string) {
     return { objects: [...this.objects.values()].filter((o) => o.key.startsWith(prefix)), truncated: false };
   }
+  async deleteObject(k: string) {
+    this.objects.delete(k);
+  }
   async head(k: string) {
     if (this.headError) throw new Error('oss flap');
     return this.objects.get(k) ?? null;

@@ -33,12 +33,24 @@ export interface HandoffRow {
   output_uploaded_at: string | null;
   input_expired: number;
   output_expired: number;
+  archived: number;
   terminal_target: string | null;
   result_manifest: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;
   last_active_at: string | null;
+}
+
+/** 列表面板归档/取消归档（路由层负责终态校验） */
+export function setHandoffArchived(db: DB, id: string, archived: boolean): void {
+  db.prepare('UPDATE handoffs SET archived=?, updated_at=? WHERE id=?').run(archived ? 1 : 0, nowIso(), id);
+}
+
+/** 删除 handoff：事件级联清；sandboxes 历史行故意无 FK，保留（S5 设计） */
+export function deleteHandoffRow(db: DB, id: string): void {
+  db.prepare('DELETE FROM handoff_events WHERE handoff_id=?').run(id);
+  db.prepare('DELETE FROM handoffs WHERE id=?').run(id);
 }
 
 export interface BotRow {
