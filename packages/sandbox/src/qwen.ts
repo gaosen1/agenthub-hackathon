@@ -93,9 +93,38 @@ export async function runTask(workspacePath: string, sessionId: string, task: st
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    proc.stdout?.on('data', (d: Buffer) => appendLog('info', `[task] ${d.toString().trim()}`.slice(0, 500)));
-    proc.stderr?.on('data', (d: Buffer) => appendLog('info', `[task] ${d.toString().trim()}`.slice(0, 500)));
-    proc.on('exit', (code) => resolve(code ?? 1));
+    // 按行缓冲 stdout/stderr：chunk 边界任意，直接切片会把回答拦腰截断（web 卡片不完整事故）；
+    // 单行上限 2000，退出时 flush 残余
+    const mkLineLogger = (prefix: string) => {
+      let buf = '';
+      const push = (line: string) => {
+        const t = line.trim();
+        if (t) appendLog('info', `${prefix} ${t}`.slice(0, 2000));
+      };
+      return {
+        data: (d: Buffer) => {
+          buf += d.toString();
+          let i: number;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            push(buf.slice(0, i));
+            buf = buf.slice(i + 1);
+          }
+        },
+        flush: () => {
+          push(buf);
+          buf = '';
+        },
+      };
+    };
+    const outLog = mkLineLogger('[task]');
+    const errLog = mkLineLogger('[task]');
+    proc.stdout?.on('data', outLog.data);
+    proc.stderr?.on('data', errLog.data);
+    proc.on('exit', (code) => {
+      outLog.flush();
+      errLog.flush();
+      resolve(code ?? 1);
+    });
     proc.on('error', () => resolve(1));
   });
 }
