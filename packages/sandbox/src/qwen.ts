@@ -208,52 +208,57 @@ export async function runTaskViaServe(
   const initId = await post('initialize', { protocolVersion: 1 });
   await wait(initId, 15_000);
   const ac = new AbortController();
-  const sse = (async () => {
-    const r = await fetch(`${base}/acp`, {
-      headers: { accept: 'text/event-stream', ...auth, ...(headers['acp-connection-id'] ? { 'acp-connection-id': headers['acp-connection-id'] } : {}) },
-      signal: ac.signal,
-    });
-    if (!r.ok || !r.body) return;
-    const reader = r.body.getReader();
-    const dec = new TextDecoder();
-    let sbuf = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      sbuf += dec.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = sbuf.indexOf('\n\n')) >= 0) {
-        const frame = sbuf.slice(0, idx);
-        sbuf = sbuf.slice(idx + 2);
-        const data = frame
-          .split('\n')
-          .filter((l) => l.startsWith('data:'))
-          .map((l) => l.slice(5).trim())
-          .join('');
-        if (!data) continue;
-        let m: Record<string, unknown>;
-        try {
-          m = JSON.parse(data) as Record<string, unknown>;
-        } catch {
-          continue;
+  // 与 acpClient 同构：连接级 SSE（应答帧）+ load 后的 session 级 SSE（session/update 流）
+  const openSse = (extra: Record<string, string> = {}): Promise<void> =>
+    (async () => {
+      const r = await fetch(`${base}/acp`, {
+        headers: { accept: 'text/event-stream', ...auth, ...(headers['acp-connection-id'] ? { 'acp-connection-id': headers['acp-connection-id'] } : {}), ...extra },
+        signal: ac.signal,
+      });
+      if (!r.ok || !r.body) return;
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let sbuf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sbuf += dec.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = sbuf.indexOf('\n\n')) >= 0) {
+          const frame = sbuf.slice(0, idx);
+          sbuf = sbuf.slice(idx + 2);
+          const data = frame
+            .split('\n')
+            .filter((l) => l.startsWith('data:'))
+            .map((l) => l.slice(5).trim())
+            .join('');
+          if (!data) continue;
+          let m: Record<string, unknown>;
+          try {
+            m = JSON.parse(data) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          if (m.id !== undefined && (m.result !== undefined || m.error !== undefined)) {
+            settle(m);
+            continue;
+          }
+          if (m.method !== 'session/update') continue;
+          const u = ((m as { params?: { update?: Record<string, unknown> } }).params?.update) ?? {};
+          const text = ((u.content as { text?: string } | undefined)?.text ?? (u.text as string | undefined)) ?? '';
+          if (u.sessionUpdate === 'agent_message_chunk' && text) feed(text);
+          else if (u.sessionUpdate === 'tool_call') emit(`tool: ${(u.title as string | undefined) ?? 'call'}`);
         }
-        if (m.id !== undefined && (m.result !== undefined || m.error !== undefined)) {
-          settle(m);
-          continue;
-        }
-        if (m.method !== 'session/update') continue;
-        const u = ((m as { params?: { update?: Record<string, unknown> } }).params?.update) ?? {};
-        const text = ((u.content as { text?: string } | undefined)?.text ?? (u.text as string | undefined)) ?? '';
-        if (u.sessionUpdate === 'agent_message_chunk' && text) feed(text);
-        else if (u.sessionUpdate === 'tool_call') emit(`tool: ${(u.title as string | undefined) ?? 'call'}`);
       }
-    }
-  })().catch(() => undefined);
+    })().catch(() => undefined);
+  const sseConns: Array<Promise<void>> = [openSse()];
 
   try {
     const loadId = await post('session/load', { sessionId, cwd: workspacePath });
     const loadResp = await wait(loadId, 60_000);
     if (loadResp.error) throw new Error('session/load 失败');
+    // session 级 SSE：任务流式事件的真正通道（连接级 SSE 不收 session/update）
+    sseConns.push(openSse({ 'acp-session-id': sessionId }));
     const prevMode = (((loadResp.result as { modes?: { currentModeId?: string } } | undefined)?.modes?.currentModeId) ?? 'auto') as string;
     // 无人值守任务切 yolo；失败不致命（serve 可能已是 yolo）
     await post('session/set_mode', { sessionId, modeId: 'yolo' })
@@ -272,6 +277,6 @@ export async function runTaskViaServe(
   } finally {
     ac.abort();
     if (buf) emit(buf);
-    void sse;
+    void sseConns;
   }
 }
