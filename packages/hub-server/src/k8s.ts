@@ -56,6 +56,8 @@ export interface K8sConfig {
   imagePullSecret?: string;
   /** ConfigMap 名（可选）：挂载最新编译的 runner.js/context.js，免重建镜像 */
   configMapName?: string;
+  /** NAS 共享只读层（可选）：预置 code-server 等工具，挂载到 /mnt/shared */
+  nas?: { server: string; path: string };
 }
 
 export const SANDBOX_LABEL = 'app=agenthub-sandbox';
@@ -66,7 +68,10 @@ export const sandboxImage = () => process.env.SANDBOX_IMAGE ?? DEFAULT_SANDBOX_I
 
 /** Pod 资源规格：createPod/createDeployment 与面板模板（S9）共用，不漂移 */
 export const SANDBOX_RESOURCES = { cpu: '2', memory: '4Gi' };
-export const SANDBOX_PORTS = { runner: 8080, serve: 8081 };
+export const SANDBOX_PORTS = { runner: 8080, serve: 8081, ide: 8082 };
+
+/** NAS 在沙箱内的挂载点（runner 由此找 tools/code-server） */
+export const NAS_MOUNT_PATH = '/mnt/shared';
 
 /** 镜像元数据登记：事实源头是 packages/sandbox/Dockerfile，改 Dockerfile 要同步改 */
 export const SANDBOX_TEMPLATE = {
@@ -80,6 +85,29 @@ export function loadKube(): k8s.KubeConfig {
   if (process.env.HUB_IN_CLUSTER === '1') kc.loadFromCluster();
   else kc.loadFromDefault();
   return kc;
+}
+
+/**
+ * Pod volumes/volumeMounts 构造（纯函数，单测直接断言）：
+ * NAS 共享只读层 + 可选 ConfigMap 叠加层，两者合并而非互斥。
+ * 都未配置时返回 undefined（spec 不出现空 volumes 数组）。
+ */
+export function buildSandboxVolumes(
+  cfg: Pick<K8sConfig, 'nas'>,
+  overlay?: { volumes: k8s.V1Volume[]; volumeMounts: k8s.V1VolumeMount[] },
+): { volumes: k8s.V1Volume[]; volumeMounts: k8s.V1VolumeMount[] } | undefined {
+  const volumes: k8s.V1Volume[] = [];
+  const volumeMounts: k8s.V1VolumeMount[] = [];
+  if (cfg.nas) {
+    volumes.push({ name: 'nas-shared', nfs: { server: cfg.nas.server, path: cfg.nas.path } });
+    volumeMounts.push({ name: 'nas-shared', mountPath: NAS_MOUNT_PATH, readOnly: true });
+  }
+  if (overlay) {
+    volumes.push(...overlay.volumes);
+    volumeMounts.push(...overlay.volumeMounts);
+  }
+  if (volumes.length === 0) return undefined;
+  return { volumes, volumeMounts };
 }
 
 export class K8sOrchestrator implements PodOrchestrator {
@@ -96,6 +124,7 @@ export class K8sOrchestrator implements PodOrchestrator {
   }
 
   async createPod(spec: SandboxPodSpec): Promise<void> {
+    const vols = buildSandboxVolumes(this.cfg);
     const pod: k8s.V1Pod = {
       metadata: {
         name: spec.podName,
@@ -110,12 +139,14 @@ export class K8sOrchestrator implements PodOrchestrator {
               tolerations: [{ key: 'virtual-kubelet.io/provider', operator: 'Exists' }],
             }
           : {}),
+        ...(vols ? { volumes: vols.volumes } : {}),
         containers: [
           {
             name: 'sandbox',
             image: this.cfg.image,
             imagePullPolicy: 'IfNotPresent',
-            ports: [{ containerPort: SANDBOX_PORTS.runner }, { containerPort: SANDBOX_PORTS.serve }],
+            ports: [{ containerPort: SANDBOX_PORTS.runner }, { containerPort: SANDBOX_PORTS.serve }, { containerPort: SANDBOX_PORTS.ide }],
+            ...(vols ? { volumeMounts: vols.volumeMounts } : {}),
             env: Object.entries({
               RUNNER_MODE: spec.mode,
               // 云端无人值守必用 yolo；静音 qwen 启动警告，避免它混入会话首条输出
@@ -174,6 +205,7 @@ export class K8sOrchestrator implements PodOrchestrator {
   /** bot 模式：创建 Deployment（ACS 驱逐后自动重建 Pod） */
   async createDeployment(spec: SandboxPodSpec): Promise<void> {
     const overlay = this.configMapOverlay();
+    const vols = buildSandboxVolumes(this.cfg, overlay);
     const deploy: k8s.V1Deployment = {
       metadata: {
         name: spec.podName,
@@ -193,14 +225,15 @@ export class K8sOrchestrator implements PodOrchestrator {
                   tolerations: [{ key: 'virtual-kubelet.io/provider', operator: 'Exists' }],
                 }
               : {}),
-            ...(overlay ? { volumes: overlay.volumes } : {}),
+            ...(vols ? { volumes: vols.volumes } : {}),
             containers: [
               {
                 name: 'sandbox',
                 image: this.cfg.image,
                 imagePullPolicy: 'IfNotPresent',
-                ports: [{ containerPort: SANDBOX_PORTS.runner }, { containerPort: SANDBOX_PORTS.serve }],
-                ...(overlay ? { command: overlay.command, args: overlay.args, volumeMounts: overlay.volumeMounts } : {}),
+                ports: [{ containerPort: SANDBOX_PORTS.runner }, { containerPort: SANDBOX_PORTS.serve }, { containerPort: SANDBOX_PORTS.ide }],
+                ...(overlay ? { command: overlay.command, args: overlay.args } : {}),
+                ...(vols ? { volumeMounts: vols.volumeMounts } : {}),
                 env: Object.entries({
                   RUNNER_MODE: spec.mode,
                   // 云端无人值守必用 yolo；静音 qwen 启动警告，避免它混入会话首条输出

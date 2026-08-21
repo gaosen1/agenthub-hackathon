@@ -39,6 +39,10 @@ if (process.env.HUB_NO_K8S !== '1') {
       acs: process.env.SANDBOX_ACS !== '0',
       ...(process.env.SANDBOX_PULL_SECRET ? { imagePullSecret: process.env.SANDBOX_PULL_SECRET } : {}),
       ...(process.env.SANDBOX_CONFIGMAP ? { configMapName: process.env.SANDBOX_CONFIGMAP } : {}),
+      // NAS 共享只读层：server 与 path 都配置才启用（Web IDE 等工具的预置层）
+      ...(process.env.SANDBOX_NAS_SERVER && process.env.SANDBOX_NAS_PATH
+        ? { nas: { server: process.env.SANDBOX_NAS_SERVER, path: process.env.SANDBOX_NAS_PATH } }
+        : {}),
     });
     const connector: SandboxConnector =
       process.env.HUB_IN_CLUSTER === '1' ? new DirectConnector(orchestrator.coreApi()) : new PortForwardConnector(new PortForward(kc));
