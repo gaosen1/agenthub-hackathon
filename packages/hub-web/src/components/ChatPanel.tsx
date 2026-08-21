@@ -30,6 +30,19 @@ const CHAT_W_MIN = 280;
 const CHAT_W_MAX = 640;
 const clampW = (w: number): number => Math.min(CHAT_W_MAX, Math.max(CHAT_W_MIN, w));
 
+const chatStoreKey = (id: string): string => `agenthub.chat.${id}`;
+
+/** 刷新恢复：SSE 重连只补未交付的 live 事件（qwen serve 不全量重放历史），故对话快照走 sessionStorage */
+function restoreMsgs(id: string): ChatMsg[] {
+  try {
+    const raw = sessionStorage.getItem(chatStoreKey(id));
+    if (raw) return JSON.parse(raw) as ChatMsg[];
+  } catch {
+    /* 隐私模式等忽略 */
+  }
+  return [];
+}
+
 /** task 指令 + runner [task] relay 行合并成卡片（当前与历史 handoff 共用） */
 function relayCards(task: string | null | undefined, items: HandoffEventsResp['items']): ChatMsg[] {
   const out: ChatMsg[] = [];
@@ -127,12 +140,22 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
     }
   };
 
-  // mock 模式：装载样本对话
+  // mock 模式：装载样本对话；hub 模式：刷新后恢复对话快照
   useEffect(() => {
     if (!isHub) setMsgs(mockExtras[t.id]?.chat ?? []);
-    else setMsgs([]);
+    else setMsgs(restoreMsgs(t.id));
     setHistoryBlocks([]);
   }, [t.id, isHub]);
+
+  // 对话快照随变持久化，供刷新/重进恢复
+  useEffect(() => {
+    if (!isHub) return;
+    try {
+      sessionStorage.setItem(chatStoreKey(t.id), JSON.stringify(msgs));
+    } catch {
+      /* 配额/隐私模式忽略 */
+    }
+  }, [msgs, t.id, isHub]);
 
   // hub 模式：running 时建立 ACP 连接
   useEffect(() => {
@@ -176,6 +199,11 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
       .then((c) => {
         setCaps(c);
         setConn('ready');
+        // 刷新恢复后若尾泡是 agent：续流无缝追加到同一气泡，不另起新泡
+        setMsgs((m) => {
+          streamIdx.current = m.length > 0 && m[m.length - 1]!.role === 'agent' ? m.length - 1 : -1;
+          return m;
+        });
       })
       .catch((e: unknown) => {
         setConn('error');

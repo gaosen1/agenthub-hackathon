@@ -51,3 +51,12 @@ describe('TaskList 归档/删除', () => {
     expect(screen.getByTitle('取消归档')).toBeTruthy();
   });
 });
+
+describe('TaskList 运行态 icon', () => {
+  it('running 行显示旋转 icon，终态行不显示', () => {
+    render(
+      <TaskList items={[done, running]} currentId={null} onSelect={noop} showArchived={false} onToggleArchived={noop} onArchive={noop} onDelete={noop} />,
+    );
+    expect(screen.getAllByTitle('会话运行中（SSE 流活跃）')).toHaveLength(1);
+  });
+});

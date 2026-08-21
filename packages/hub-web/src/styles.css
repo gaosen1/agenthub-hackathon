@@ -409,3 +409,6 @@ select.fi{width:auto;cursor:pointer}
 .load-more{display:flex;align-items:center;gap:6px;margin:4px auto 10px;padding:4px 12px;font-size:11px;color:var(--n-tx2);background:transparent;border:1px solid var(--n-line2);border-radius:999px;cursor:pointer}
 .load-more:hover{color:var(--n-tx);border-color:var(--n-tx3)}
 .load-more:disabled{opacity:.6;cursor:default}
+
+/* 侧栏 running 行的旋转状态 icon */
+.run-spin{display:inline-flex;align-items:center;color:var(--brand);margin-left:2px}

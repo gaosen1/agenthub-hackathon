@@ -113,6 +113,13 @@ export function TaskList({ items, currentId, onSelect, showArchived, onToggleArc
                 <span className="repo">
                   <i className="fa-solid fa-folder-tree" /> {t.agentName}
                 </span>
+                {t.status === 'running' && (
+                  <span className="run-spin" title="会话运行中（SSE 流活跃）">
+                    <svg className="spin" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden>
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    </svg>
+                  </span>
+                )}
                 <span className={`badge ${m.cls}`}>
                   <i className={m.icon} />
                   {m.label}
