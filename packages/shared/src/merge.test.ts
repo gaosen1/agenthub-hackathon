@@ -116,6 +116,49 @@ describe('mergeSessionJsonlFile（备份可回滚）', () => {
   });
 });
 
+describe('linearizeChain（hf-f4da72 回归）', () => {
+  const uline = (role: string, text: string, ts: string, uuid: string, parent: string | null) =>
+    JSON.stringify({ type: role, content: text, timestamp: ts, uuid, parentUuid: parent });
+  const marker = JSON.stringify({
+    type: 'agenthub_handoff_marker',
+    handoffId: HF,
+    baseCommit: 'b1',
+    messageCount: 2,
+    timestamp: '2026-08-04T02:00:00Z',
+  });
+
+  it('分叉合并后 parentUuid 单链：从尾遍历覆盖本地+云端全部分叉记录', () => {
+    const pfx = [
+      uline('user', '本地上下文', '2026-08-04T01:00:00Z', 'u1', null),
+      uline('assistant', 'ok', '2026-08-04T01:00:05Z', 'u2', 'u1'),
+      marker,
+    ];
+    const localDelta = [uline('user', '本地测试轮', '2026-08-04T05:00:00Z', 'u3', 'u2')];
+    const cloudDelta = [uline('assistant', '云端：四则运算完成', '2026-08-04T03:00:00Z', 'u4', 'u2')];
+
+    const r = mergeSessionJsonl([...pfx, ...localDelta].join('\n') + '\n', [...pfx, ...cloudDelta].join('\n') + '\n', HF);
+    assert.equal(r.forked, true);
+
+    const entries = r.content
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((j) => typeof j['uuid'] === 'string');
+    const byUuid = new Map(entries.map((j) => [j['uuid'] as string, j]));
+    // 从叶子回走 parentUuid 链，应覆盖全部 4 条会话记录（无分叉遗漏）
+    const visited: string[] = [];
+    let cur: Record<string, unknown> | undefined = entries[entries.length - 1];
+    while (cur) {
+      visited.push(cur['uuid'] as string);
+      cur = byUuid.get(cur['parentUuid'] as string);
+    }
+    assert.deepEqual(new Set(visited), new Set(['u1', 'u2', 'u3', 'u4']));
+    // 时间序：云端(03:00) 在本地测试轮(05:00) 之前
+    const order = entries.map((j) => j['uuid']);
+    assert.ok(order.indexOf('u4') < order.indexOf('u3'));
+  });
+});
+
 describe('appendHandoffMarker（§3.3）', () => {
   it('追加 marker 且 messageCount = 现有记录条数', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ah-marker-'));

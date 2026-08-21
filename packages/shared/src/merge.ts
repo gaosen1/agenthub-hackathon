@@ -42,6 +42,27 @@ function lineTimestamp(line: ParsedLine): number {
   return 0;
 }
 
+/**
+ * 线性化 parentUuid 链：交错合并后本地/云端分叉各自保留原 parentUuid，
+ * 而 qwen --resume 沿叶子链渲染，分叉分支会不可见（hf-f4da72 事故）。
+ * 按文件顺序重接为单链；无 uuid 的行（marker/notice）不参与。
+ */
+export function linearizeChain(lines: string[]): string[] {
+  let prevUuid: string | undefined;
+  return lines.map((raw) => {
+    let j: Record<string, unknown> | null = null;
+    try {
+      j = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return raw;
+    }
+    if (!j || typeof j['uuid'] !== 'string') return raw;
+    const out = prevUuid === undefined ? null : { ...j, parentUuid: prevUuid };
+    prevUuid = j['uuid'] as string;
+    return out === null ? raw : JSON.stringify(out);
+  });
+}
+
 function findMarker(lines: ParsedLine[], handoffId: string): { index: number; marker: HandoffMarker } | null {
   for (let i = lines.length - 1; i >= 0; i--) {
     const j = lines[i].json;
@@ -144,7 +165,7 @@ export function mergeSessionJsonl(localContent: string, cloudContent: string, ha
     body = [notice, ...interleaved];
   }
 
-  const content = [...prefix, ...body, JSON.stringify(mergedMarker)].join('\n') + '\n';
+  const content = linearizeChain([...prefix, ...body, JSON.stringify(mergedMarker)]).join('\n') + '\n';
   return { content, mergedCount: cloudDelta.length, forked, skipped: false };
 }
 
