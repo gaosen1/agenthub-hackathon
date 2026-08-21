@@ -34,25 +34,25 @@ const T = (h: string, m: string, s = '00'): string => `2026-08-04T${h}:${m}:${s}
 export const mockSummaries: HandoffSummary[] = [
   {
     id: 'hf-9f3a2c', agentName: 'payment-gateway', status: 'running', kind: 'web',
-    branch: 'refactor/order-service', baseCommit: 'a41c9e0', sessionId: 'sess-c81e3f',
+    branch: 'refactor/order-service', baseCommit: 'a41c9e0', sessionId: 'sess-c81e3f', archived: false,
     task: '重构 OrderService，拆分状态机逻辑并补齐单元测试',
     createdAt: T('14', '02', '11'), updatedAt: T('14', '15', '00'),
   },
   {
     id: 'hf-7b1e88', agentName: 'data-sync-cli', status: 'done', kind: 'web',
-    branch: 'main', baseCommit: 'f02b117', sessionId: 'sess-a2f9d0',
+    branch: 'main', baseCommit: 'f02b117', sessionId: 'sess-a2f9d0', archived: false,
     task: '批量迁移 200+ 处 legacy API 调用到 v2 SDK',
     createdAt: T('10', '35', '02'), updatedAt: T('11', '02', '38'),
   },
   {
     id: 'hf-c204d1', agentName: 'ml-feature-store', status: 'queued', kind: 'web',
-    branch: 'feat/ttl-cache', baseCommit: '0c8d5aa', sessionId: 'sess-77b2ce',
+    branch: 'feat/ttl-cache', baseCommit: '0c8d5aa', sessionId: 'sess-77b2ce', archived: false,
     task: '为特征查询层增加 TTL 缓存与失效策略',
     createdAt: T('14', '18', '44'), updatedAt: T('14', '19', '02'),
   },
   {
     id: 'hf-33e0af', agentName: 'gateway-config', status: 'failed', kind: 'web',
-    branch: 'hotfix/rate-limit', baseCommit: '77aa03e', sessionId: 'sess-de10b7',
+    branch: 'hotfix/rate-limit', baseCommit: '77aa03e', sessionId: 'sess-de10b7', archived: false,
     task: '修复限流配置热更新不生效问题并补充回归用例',
     createdAt: T('03', '20', '05'), updatedAt: T('03', '29', '34'),
   },

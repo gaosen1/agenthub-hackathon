@@ -397,3 +397,10 @@ select.fi{width:auto;cursor:pointer}
 @media (prefers-reduced-motion: reduce){
   .spin,.tdots i,.cursor,.chat-h .live .dot{animation:none}
 }
+
+/* 列表行操作（归档/删除）：hover/focus 显现，MASTER.md 发丝线 + 无发光 */
+.task-actions{margin-left:auto;display:flex;gap:4px;align-items:center;opacity:0;transition:opacity .12s}
+.task-item:hover .task-actions,.task-item:focus-within .task-actions{opacity:1}
+.task-actions button{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--n-line2);background:transparent;color:var(--n-tx2);border-radius:4px;height:22px;padding:0 6px;font-size:11px;cursor:pointer}
+.task-actions button:hover{color:var(--n-tx);border-color:var(--n-tx3)}
+.task-actions button.danger{color:var(--err);border-color:var(--err)}

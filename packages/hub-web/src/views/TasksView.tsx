@@ -8,8 +8,9 @@
  */
 import { useState } from 'react';
 import { Navigate, useNavigate, useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { useHandoffDetail, useHandoffs } from '../api/hooks.js';
-import { useDataSource } from '../api/client.js';
+import { archiveHandoff, deleteHandoff, useDataSource } from '../api/client.js';
 import { TaskList } from '../components/TaskList.js';
 import { TaskDetail } from '../components/TaskDetail.js';
 import { ChatPanel } from '../components/ChatPanel.js';
@@ -19,9 +20,27 @@ export function TasksView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const dataSource = useDataSource();
-  const { data: listData } = useHandoffs();
+  const [showArchived, setShowArchived] = useState(false);
+  const { data: listData } = useHandoffs(showArchived);
   const items = listData?.items ?? [];
   const [pullOpen, setPullOpen] = useState(false);
+  const qc = useQueryClient();
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['handoffs'] });
+
+  const handleArchive = async (id: string, archived: boolean) => {
+    try {
+      await archiveHandoff(id, archived);
+    } finally {
+      refresh();
+    }
+  };
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteHandoff(id);
+    } finally {
+      refresh();
+    }
+  };
 
   const currentId = id ?? null;
   const { data: detail } = useHandoffDetail(currentId);
@@ -34,7 +53,15 @@ export function TasksView() {
 
   return (
     <div className="main">
-      <TaskList items={items} currentId={currentId} onSelect={(next) => navigate(`/tasks/${next}`)} />
+      <TaskList
+        items={items}
+        currentId={currentId}
+        onSelect={(next) => navigate(`/tasks/${next}`)}
+        showArchived={showArchived}
+        onToggleArchived={() => setShowArchived((v) => !v)}
+        onArchive={handleArchive}
+        onDelete={handleDelete}
+      />
       <section className="detail">
         <div className="detail-inner">
           {detail ? (

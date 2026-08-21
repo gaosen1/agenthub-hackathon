@@ -87,9 +87,9 @@ export async function login(username: string, password: string, register = false
 
 // ---------- handoffs ----------
 
-export async function fetchHandoffs(): Promise<ListHandoffsResp> {
+export async function fetchHandoffs(archived = false): Promise<ListHandoffsResp> {
   try {
-    const data = await hubFetch('/api/handoffs', (d) => ListHandoffsRespSchema.parse(d));
+    const data = await hubFetch(`/api/handoffs${archived ? '?archived=1' : ''}`, (d) => ListHandoffsRespSchema.parse(d));
     setDataSource('hub');
     return data;
   } catch (e) {
@@ -100,6 +100,19 @@ export async function fetchHandoffs(): Promise<ListHandoffsResp> {
     setDataSource('mock');
     return { items: mockSummaries };
   }
+}
+
+/** 归档/取消归档（仅终态；非终态服务端 409） */
+export async function archiveHandoff(id: string, archived: boolean): Promise<void> {
+  await hubFetch(`/api/handoffs/${id}/archive`, () => undefined, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ archived }),
+  });
+}
+
+export async function deleteHandoff(id: string): Promise<void> {
+  await hubFetch(`/api/handoffs/${id}`, () => undefined, { method: 'DELETE' });
 }
 
 export async function fetchHandoffDetail(id: string): Promise<HandoffDetail> {

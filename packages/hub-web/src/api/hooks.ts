@@ -5,10 +5,10 @@ import { useQuery } from '@tanstack/react-query';
 import type { HandoffDetail, HandoffEventsResp, ListHandoffsResp } from '@agenthub/shared/contracts';
 import { fetchHandoffDetail, fetchHandoffEvents, fetchHandoffs } from './client.js';
 
-export function useHandoffs() {
+export function useHandoffs(showArchived = false) {
   return useQuery<ListHandoffsResp>({
-    queryKey: ['handoffs'],
-    queryFn: fetchHandoffs,
+    queryKey: ['handoffs', showArchived],
+    queryFn: () => fetchHandoffs(showArchived),
     refetchInterval: 5000,
   });
 }

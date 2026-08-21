@@ -3,6 +3,27 @@ import type { HandoffSummary } from '@agenthub/shared/contracts';
 import { STATUS_META, TERMINAL_BAD, fmtHm } from '../statusMeta.js';
 import { mockExtras } from '../api/mock.js';
 
+/** MASTER.md：新代码一律内联 SVG（1.5px 描边），不用 emoji/FA 字形 */
+const ArchiveIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <rect x="3" y="4" width="18" height="5" rx="1" />
+    <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9" />
+    <path d="M10 13h4" />
+  </svg>
+);
+const UnarchiveIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <rect x="3" y="4" width="18" height="5" rx="1" />
+    <path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9" />
+    <path d="M12 17v-4m0 0-2 2m2-2 2 2" />
+  </svg>
+);
+const TrashIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3" />
+  </svg>
+);
+
 const FILTERS = [
   { key: 'all', label: '全部' },
   { key: 'running', label: '执行中' },
@@ -14,11 +35,16 @@ interface Props {
   items: HandoffSummary[];
   currentId: string | null;
   onSelect: (id: string) => void;
+  showArchived: boolean;
+  onToggleArchived: () => void;
+  onArchive: (id: string, archived: boolean) => void;
+  onDelete: (id: string) => void;
 }
 
-export function TaskList({ items, currentId, onSelect }: Props) {
+export function TaskList({ items, currentId, onSelect, showArchived, onToggleArchived, onArchive, onDelete }: Props) {
   const [kw, setKw] = useState('');
   const [filter, setFilter] = useState<string>('all');
+  const [confirmId, setConfirmId] = useState<string | null>(null);
 
   const list = useMemo(() => {
     const k = kw.trim().toLowerCase();
@@ -58,6 +84,14 @@ export function TaskList({ items, currentId, onSelect }: Props) {
             {f.label}
           </button>
         ))}
+        <button
+          className={`chip ${showArchived ? 'active' : ''}`}
+          style={{ marginLeft: 'auto' }}
+          title="切换归档视图"
+          onClick={onToggleArchived}
+        >
+          归档
+        </button>
       </div>
       <div className="task-list">
         {list.length === 0 && (
@@ -68,6 +102,7 @@ export function TaskList({ items, currentId, onSelect }: Props) {
         {list.map((t) => {
           const m = STATUS_META[t.status];
           const rounds = mockExtras[t.id]?.rounds;
+          const terminal = t.status === 'done' || TERMINAL_BAD.includes(t.status);
           return (
             <div
               key={t.id}
@@ -82,6 +117,31 @@ export function TaskList({ items, currentId, onSelect }: Props) {
                   <i className={m.icon} />
                   {m.label}
                 </span>
+                {terminal && (
+                  <span className="task-actions" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      title={t.archived ? '取消归档' : '归档'}
+                      onClick={() => onArchive(t.id, !t.archived)}
+                    >
+                      {t.archived ? <UnarchiveIcon /> : <ArchiveIcon />}
+                    </button>
+                    <button
+                      className={confirmId === t.id ? 'danger' : ''}
+                      title="删除（两步确认）"
+                      onClick={() => {
+                        if (confirmId === t.id) {
+                          setConfirmId(null);
+                          onDelete(t.id);
+                        } else {
+                          setConfirmId(t.id);
+                        }
+                      }}
+                      onBlur={() => setConfirmId((c) => (c === t.id ? null : c))}
+                    >
+                      {confirmId === t.id ? '确认？' : <TrashIcon />}
+                    </button>
+                  </span>
+                )}
               </div>
               <div className="summary">{t.task ?? '（交互接力：无预设指令）'}</div>
               <div className="meta">
