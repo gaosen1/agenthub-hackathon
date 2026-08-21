@@ -24,6 +24,9 @@ spec:
             - { name: HUB_DB_PATH, value: /data/hub.sqlite }
             - { name: TASK_LINGER_MINUTES, value: '30' }
             - { name: SANDBOX_IDLE_TTL_MINUTES, value: '120' }
+            # Web IDE（code-server）NAS 共享层：两项都配置才启用，播种见 30-nas-seed-job.yaml
+            # - { name: SANDBOX_NAS_SERVER, value: xxx.nas.aliyuncs.com }
+            # - { name: SANDBOX_NAS_PATH, value: /agenthub }
             # 缺 OSS 凭证时自动降级为 NullOssClient；如需强制关闭 OSS 面板取消注释：
             # - { name: HUB_NO_OSS, value: '1' }
           envFrom:

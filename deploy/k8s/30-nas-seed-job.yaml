@@ -1,0 +1,58 @@
+# NAS 共享层一次性播种 Job：把 code-server 预置到 NAS，供沙箱 Pod 只读挂载后按需拉起。
+#
+# 使用前替换两处占位符（与 hub-server 的 SANDBOX_NAS_SERVER / SANDBOX_NAS_PATH 一致）：
+#   REPLACE_NAS_SERVER → NAS 挂载点地址（如 xxx.nas.aliyuncs.com）
+#   REPLACE_NAS_PATH   → NAS 子目录（如 /agenthub）
+#
+# 目录约定（runner ide.ts 依赖）：<path>/tools/code-server/<version>/ + current 软链
+# 升级 code-server：改 CODE_SERVER_VERSION 重跑本 Job，current 软链原子切换。
+#
+# 注意：Job 需要对 NAS 的读写挂载，因此与沙箱的只读挂载不同；
+# 若集群全量使用 ACS 弹性算力，保留下方 nodeSelector/tolerations，否则删除。
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: agenthub-nas-seed
+  namespace: agenthub
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector: { type: virtual-kubelet }
+      tolerations:
+        - { key: virtual-kubelet.io/provider, operator: Exists }
+      containers:
+        - name: seed
+          image: alpine:3.20
+          env:
+            - { name: CODE_SERVER_VERSION, value: '4.133.0' }
+          command: ['sh', '-c']
+          args:
+            - |
+              set -e
+              VER="$CODE_SERVER_VERSION"
+              DEST=/nas/tools/code-server
+              TMP="$DEST/.$VER.tmp"
+              mkdir -p "$TMP"
+              echo "downloading code-server v$VER ..."
+              # 集群出网受限时，可先把 tar.gz 传到 OSS/内网源，再改这里的 URL
+              wget -q -O /tmp/cs.tar.gz \
+                "https://github.com/coder/code-server/releases/download/v$VER/code-server-$VER-linux-amd64.tar.gz"
+              tar -xzf /tmp/cs.tar.gz -C "$TMP" --strip-components=1
+              # 原子发布：先落版本目录，再切 current 软链，避免读到半成品
+              rm -rf "$DEST/$VER"
+              mv "$TMP" "$DEST/$VER"
+              ln -sfn "$DEST/$VER" "$DEST/current"
+              "$DEST/current/bin/code-server" --version
+              echo "seeded: $DEST/current -> $DEST/$VER"
+          volumeMounts:
+            - { name: nas, mountPath: /nas }
+          resources:
+            requests: { cpu: 500m, memory: 512Mi }
+            limits: { cpu: '1', memory: 1Gi }
+      volumes:
+        - name: nas
+          nfs:
+            server: REPLACE_NAS_SERVER
+            path: REPLACE_NAS_PATH
