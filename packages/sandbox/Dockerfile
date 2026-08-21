@@ -12,7 +12,7 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debia
     && git config --system user.name agenthub \
     && git config --system user.email agenthub@sandbox.local
 
-ARG QWEN_VERSION=0.20.1
+ARG QWEN_VERSION=0.21.14
 RUN npm config set registry https://registry.npmmirror.com \
     && npm install -g @qwen-code/qwen-code@${QWEN_VERSION}
 
