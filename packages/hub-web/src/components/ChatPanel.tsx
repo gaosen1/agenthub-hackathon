@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import type { HandoffDetail, SandboxEvent } from '@agenthub/shared/contracts';
-import { useDataSource } from '../api/client.js';
+import type { HandoffDetail, HandoffEventsResp, SandboxEvent } from '@agenthub/shared/contracts';
+import { fetchHandoffEvents, useDataSource } from '../api/client.js';
 import { AcpClient } from '../api/acpClient.js';
 import type { AcpCaps } from '../api/acpClient.js';
-import { useHandoffEvents } from '../api/hooks.js';
+import { useHandoffEvents, useHandoffs } from '../api/hooks.js';
 import { mockExtras } from '../api/mock.js';
 import type { ChatMsg } from '../api/mock.js';
 import { Markdown } from './Markdown.js';
@@ -29,6 +29,30 @@ const IconSpinner = () => (
 const CHAT_W_MIN = 280;
 const CHAT_W_MAX = 640;
 const clampW = (w: number): number => Math.min(CHAT_W_MAX, Math.max(CHAT_W_MIN, w));
+
+/** task 指令 + runner [task] relay 行合并成卡片（当前与历史 handoff 共用） */
+function relayCards(task: string | null | undefined, items: HandoffEventsResp['items']): ChatMsg[] {
+  const out: ChatMsg[] = [];
+  if (task) out.push({ role: 'user', via: 'push --task', text: task, time: '' });
+  for (const e of items) {
+    if (e.kind !== 'log') continue;
+    try {
+      const ev = JSON.parse(e.payload) as SandboxEvent;
+      if (ev.tag === 'info' && ev.c.startsWith('[task] ')) {
+        // runner 按行拆日志；连续的 relay 行属于同一条回答，合并成单卡完整渲染
+        const last = out[out.length - 1];
+        if (last && last.role === 'agent' && last.via === 'task relay') {
+          last.text += `\n${ev.c.slice(7)}`;
+        } else {
+          out.push({ role: 'agent', via: 'task relay', text: ev.c.slice(7), time: '' });
+        }
+      }
+    } catch {
+      /* 非 JSON 日志跳过 */
+    }
+  }
+  return out;
+}
 
 /**
  * 云端会话面板。
@@ -65,33 +89,49 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
 
   // task 接力历史（真 Hub）：task 指令 + runner [task] 日志里的 agent 总结
   const { data: eventsData } = useHandoffEvents(t.id, isHub);
-  const taskHistory = useMemo<ChatMsg[]>(() => {
-    if (!isHub || !t.task) return [];
-    const out: ChatMsg[] = [{ role: 'user', via: 'push --task', text: t.task, time: '' }];
-    for (const e of eventsData?.items ?? []) {
-      if (e.kind !== 'log') continue;
-      try {
-        const ev = JSON.parse(e.payload) as SandboxEvent;
-        if (ev.tag === 'info' && ev.c.startsWith('[task] ')) {
-          // runner 按行拆日志；连续的 relay 行属于同一条回答，合并成单卡完整渲染
-          const last = out[out.length - 1];
-          if (last && last.role === 'agent' && last.via === 'task relay') {
-            last.text += `\n${ev.c.slice(7)}`;
-          } else {
-            out.push({ role: 'agent', via: 'task relay', text: ev.c.slice(7), time: '' });
-          }
-        }
-      } catch {
-        /* 非 JSON 日志跳过 */
+  const taskHistory = useMemo<ChatMsg[]>(
+    () => (isHub ? relayCards(t.task, eventsData?.items ?? []) : []),
+    [isHub, t.task, eventsData],
+  );
+
+  // 「加载更多」：同 session 的历次 handoff 对话作为更以前的历史，逐块向上加载
+  const { data: listData } = useHandoffs();
+  const priorHandoffs = useMemo(() => {
+    const all = listData?.items ?? [];
+    return all
+      .filter((h) => h.sessionId === t.sessionId && h.createdAt < t.createdAt)
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  }, [listData, t.sessionId, t.createdAt]);
+  const [historyBlocks, setHistoryBlocks] = useState<Array<{ id: string; label: string; cards: ChatMsg[] }>>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const loadMore = async () => {
+    const next = priorHandoffs[historyBlocks.length];
+    if (!next || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const items: HandoffEventsResp['items'] = [];
+      let after = 0;
+      for (let p = 0; p < 10; p++) {
+        const r = await fetchHandoffEvents(next.id, after);
+        items.push(...r.items);
+        after = r.nextAfter;
+        if (r.items.length < 500) break;
       }
+      const cards = relayCards(next.task, items);
+      if (cards.length === 0) {
+        cards.push({ role: 'agent', via: 'task relay', text: '该 handoff 无文本记录（交互聊天不入事件流，完整对话见本地 session）', time: '' });
+      }
+      setHistoryBlocks((b) => [...b, { id: next.id, label: `${next.id} · ${next.createdAt.slice(11, 16)}`, cards }]);
+    } finally {
+      setLoadingMore(false);
     }
-    return out;
-  }, [isHub, t.id, t.task, eventsData]);
+  };
 
   // mock 模式：装载样本对话
   useEffect(() => {
     if (!isHub) setMsgs(mockExtras[t.id]?.chat ?? []);
     else setMsgs([]);
+    setHistoryBlocks([]);
   }, [t.id, isHub]);
 
   // hub 模式：running 时建立 ACP 连接
@@ -211,6 +251,30 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
   const rounds = extra?.rounds;
   const shown = [...taskHistory, ...msgs];
 
+  const renderMsg = (c: ChatMsg, key: string | number) => (
+    <div className={`msg ${c.role} fade-in`} key={key}>
+      <div className="av">
+        <i className={`fa-solid ${c.role === 'user' ? 'fa-user' : 'fa-robot'}`} />
+      </div>
+      <div className="bd">
+        <div className="who">
+          {c.role === 'user' ? '我' : 'Cloud Agent'}
+          {c.via && <span className="via">via {c.via}</span>}
+          {c.time ? ` · ${c.time}` : ''}
+        </div>
+        <div className="bubble">
+          {c.role === 'agent' && c.text ? <Markdown text={c.text} /> : c.text}
+          {c.tool && (
+            <div className="tool-call">
+              <i className="fa-solid fa-wrench" />
+              {c.tool}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
   // 运行时切换 qwen code 模式 / 模型（ACP session/set_mode、session/set_model）
   const switchMode = (modeId: string) => {
     if (!acp.current) return;
@@ -294,6 +358,19 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
         )}
       </div>
       <div className="chat-body" ref={body}>
+        {isHub && priorHandoffs.length > historyBlocks.length && (
+          <button className="load-more" disabled={loadingMore} onClick={() => void loadMore()}>
+            {loadingMore ? <IconSpinner /> : null} 加载更以前的历史 · 还有 {priorHandoffs.length - historyBlocks.length} 次 handoff
+          </button>
+        )}
+        {[...historyBlocks].reverse().map((b) => (
+          <div key={b.id}>
+            <div className="sysline">
+              <i className="fa-solid fa-flag" /> handoff {b.label} · 更以前的历史
+            </div>
+            {b.cards.map((c, i) => renderMsg(c, `${b.id}-${i}`))}
+          </div>
+        ))}
         <div className="sysline">
           <i className="fa-solid fa-flag" /> handoff_marker · 本地上下文已在云端恢复
         </div>
@@ -307,29 +384,7 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
             云端会话尚未开始
           </div>
         )}
-        {shown.map((c, i) => (
-          <div className={`msg ${c.role} fade-in`} key={i}>
-            <div className="av">
-              <i className={`fa-solid ${c.role === 'user' ? 'fa-user' : 'fa-robot'}`} />
-            </div>
-            <div className="bd">
-              <div className="who">
-                {c.role === 'user' ? '我' : 'Cloud Agent'}
-                {c.via && <span className="via">via {c.via}</span>}
-                {c.time ? ` · ${c.time}` : ''}
-              </div>
-              <div className="bubble">
-                {c.role === 'agent' && c.text ? <Markdown text={c.text} /> : c.text}
-                {c.tool && (
-                  <div className="tool-call">
-                    <i className="fa-solid fa-wrench" />
-                    {c.tool}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        ))}
+        {shown.map((c, i) => renderMsg(c, i))}
         {busy && streamIdx.current < 0 && (
           <div className="msg agent fade-in">
             <div className="av">
