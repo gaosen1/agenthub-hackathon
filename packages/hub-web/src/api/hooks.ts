@@ -24,10 +24,25 @@ export function useHandoffDetail(id: string | null) {
 }
 
 /** 真 Hub 的状态时间线 + 日志事件流（mock 模式返回空，组件回退 mockExtras） */
+const eventCursors = new Map<string, { after: number; items: HandoffEventsResp['items'] }>();
+
 export function useHandoffEvents(id: string | null, enabled: boolean) {
   return useQuery<HandoffEventsResp>({
     queryKey: ['handoff-events', id],
-    queryFn: () => fetchHandoffEvents(id!),
+    queryFn: async () => {
+      const key = id!;
+      const st = eventCursors.get(key) ?? { after: 0, items: [] };
+      // 游标推进式增量拉取：服务端每页 500，翻到短页为止。
+      // 旧实现恒 after=0，长会话超过 500 条后后续日志永不渲染（窗口 bug）
+      for (let page = 0; page < 10; page++) {
+        const r = await fetchHandoffEvents(key, st.after);
+        st.items = st.items.concat(r.items);
+        st.after = r.nextAfter;
+        if (r.items.length < 500) break;
+      }
+      eventCursors.set(key, st);
+      return { items: st.items, nextAfter: st.after };
+    },
     enabled: id !== null && enabled,
     refetchInterval: 2000,
   });
