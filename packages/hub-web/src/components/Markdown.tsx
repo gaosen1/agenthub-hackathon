@@ -32,30 +32,87 @@ export function mdToHtml(src: string): string {
   });
 
   const out: string[] = [];
-  for (const raw of text.split(/\n{2,}/)) {
-    const block = raw.trim();
-    if (!block) continue;
-    if (/^@@fn\d+@@$/.test(block)) {
-      out.push(block);
+  // 行扫描器：标题/列表/引用按行即时成块，避免「标题+列表」混合块落入 <p> 退路（hf 事故：### 与 - 原样显示）
+  let para: string[] = [];
+  let list: { type: 'ul' | 'ol'; items: string[] } | null = null;
+  let quote: string[] = [];
+  const flushPara = () => {
+    if (para.length) {
+      out.push(`<p>${para.map(inline).join('<br>')}</p>`);
+      para = [];
+    }
+  };
+  const flushList = () => {
+    if (list) {
+      const tag = list.type;
+      out.push(`<${tag}>${list.items.map((i) => `<li>${inline(i)}</li>`).join('')}</${tag}>`);
+      list = null;
+    }
+  };
+  const flushQuote = () => {
+    if (quote.length) {
+      out.push(`<blockquote>${quote.map(inline).join('<br>')}</blockquote>`);
+      quote = [];
+    }
+  };
+  const flushAll = () => {
+    flushPara();
+    flushList();
+    flushQuote();
+  };
+
+  for (const rawLine of text.split('\n')) {
+    const t = rawLine.trim();
+    if (/^@@fn\d+@@$/.test(t)) {
+      flushAll();
+      out.push(t);
       continue;
     }
-    const lines = block.split('\n');
-    if (lines.every((l) => /^\s*[-*] /.test(l))) {
-      out.push(`<ul>${lines.map((l) => `<li>${inline(l.replace(/^\s*[-*] /, ''))}</li>`).join('')}</ul>`);
-    } else if (lines.every((l) => /^\s*\d+\. /.test(l))) {
-      out.push(`<ol>${lines.map((l) => `<li>${inline(l.replace(/^\s*\d+\. /, ''))}</li>`).join('')}</ol>`);
-    } else if (lines.every((l) => /^&gt; /.test(l))) {
-      out.push(`<blockquote>${inline(lines.map((l) => l.replace(/^&gt; /, '')).join('<br>'))}</blockquote>`);
-    } else {
-      const h = block.match(/^(#{1,4})\s+(.+)$/);
-      if (h && lines.length === 1) {
-        const lv = Math.min(h[1]!.length + 3, 6); // # → h4，气泡内层级压低
-        out.push(`<h${lv}>${inline(h[2]!)}</h${lv}>`);
-      } else {
-        out.push(`<p>${inline(lines.join('<br>'))}</p>`);
-      }
+    if (!t) {
+      flushAll();
+      continue;
     }
+    const h = t.match(/^(#{1,4})\s+(.+)$/);
+    if (h) {
+      flushAll();
+      const lv = Math.min(h[1]!.length + 3, 6); // # → h4，气泡内层级压低
+      out.push(`<h${lv}>${inline(h[2]!)}</h${lv}>`);
+      continue;
+    }
+    const ul = t.match(/^[-*]\s+(.+)$/);
+    if (ul) {
+      flushPara();
+      flushQuote();
+      if (!list || list.type !== 'ul') {
+        flushList();
+        list = { type: 'ul', items: [] };
+      }
+      list.items.push(ul[1]!);
+      continue;
+    }
+    const ol = t.match(/^\d+\.\s+(.+)$/);
+    if (ol) {
+      flushPara();
+      flushQuote();
+      if (!list || list.type !== 'ol') {
+        flushList();
+        list = { type: 'ol', items: [] };
+      }
+      list.items.push(ol[1]!);
+      continue;
+    }
+    const q = t.match(/^&gt;\s?(.*)$/);
+    if (q) {
+      flushPara();
+      flushList();
+      quote.push(q[1]!);
+      continue;
+    }
+    flushList();
+    flushQuote();
+    para.push(t);
   }
+  flushAll();
   return out.join('').replace(/@@fn(\d+)@@/g, (_m, i: string) => fences[Number(i)] ?? '');
 }
 

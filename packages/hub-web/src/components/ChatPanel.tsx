@@ -73,7 +73,13 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
       try {
         const ev = JSON.parse(e.payload) as SandboxEvent;
         if (ev.tag === 'info' && ev.c.startsWith('[task] ')) {
-          out.push({ role: 'agent', via: 'task relay', text: ev.c.slice(7), time: '' });
+          // runner 按行拆日志；连续的 relay 行属于同一条回答，合并成单卡完整渲染
+          const last = out[out.length - 1];
+          if (last && last.role === 'agent' && last.via === 'task relay') {
+            last.text += `\n${ev.c.slice(7)}`;
+          } else {
+            out.push({ role: 'agent', via: 'task relay', text: ev.c.slice(7), time: '' });
+          }
         }
       } catch {
         /* 非 JSON 日志跳过 */

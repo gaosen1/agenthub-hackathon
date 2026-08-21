@@ -29,4 +29,12 @@ describe('mdToHtml', () => {
     expect(mdToHtml('- a\n- b')).toContain('<ul><li>a</li><li>b</li></ul>');
     expect(mdToHtml('## 标题')).toContain('<h5>标题</h5>');
   });
+
+  it('混合块：标题+列表+段落各自成块（### 与 - 不再原样落入 <p>）', () => {
+    const html = mdToHtml('### 2. 键盘快捷键支持\n- 功能描述： 支持键盘输入\n- 价值： 提高效率\n普通段落');
+    expect(html).toContain('<h6>2. 键盘快捷键支持</h6>');
+    expect(html).toContain('<ul><li>功能描述： 支持键盘输入</li><li>价值： 提高效率</li></ul>');
+    expect(html).toContain('<p>普通段落</p>');
+    expect(html).not.toContain('###');
+  });
 });
