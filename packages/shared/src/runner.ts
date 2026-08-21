@@ -68,3 +68,11 @@ export const RunnerLogsRespSchema = z.object({
   nextAfter: z.number(),
 });
 export type RunnerLogsResp = z.infer<typeof RunnerLogsRespSchema>;
+
+/** Web IDE（code-server）状态：POST /ide/ensure 与 GET /ide/status 共用 */
+export const RunnerIdeStatusRespSchema = z.object({
+  ready: z.boolean(),
+  pid: z.number().optional(),
+  error: z.string().optional(),
+});
+export type RunnerIdeStatusResp = z.infer<typeof RunnerIdeStatusRespSchema>;

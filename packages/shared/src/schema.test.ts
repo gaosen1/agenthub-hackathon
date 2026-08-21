@@ -28,6 +28,7 @@ import {
   RunnerBindReqSchema,
   RunnerChatsRespSchema,
   RunnerHealthzRespSchema,
+  RunnerIdeStatusRespSchema,
   RunnerLoadReqSchema,
   RunnerLogsRespSchema,
   RunnerModeSchema,
@@ -139,6 +140,7 @@ const cases: Case[] = [
   { name: 'RunnerChatsResp', schema: RunnerChatsRespSchema, valid: { items: [] }, invalid: { items: [{ title: 'no chatId' }] } },
   { name: 'RunnerBindReq', schema: RunnerBindReqSchema, valid: { chatId: 'c', sessionId: 's' }, invalid: { chatId: '', sessionId: 's' } },
   { name: 'RunnerLogsResp', schema: RunnerLogsRespSchema, valid: { items: [{ t: 't', tag: 'ok', c: 'done' }], nextAfter: 3 }, invalid: { items: [], nextAfter: 'x' } },
+  { name: 'RunnerIdeStatusResp', schema: RunnerIdeStatusRespSchema, valid: { ready: true, pid: 1234 }, invalid: { ready: 'yes' } },
 ];
 
 describe('zod schema 合法/非法样本（D1 验收）', () => {

@@ -227,7 +227,7 @@ export const SandboxTemplateSchema = z.object({
   qwenVersion: z.string(),
   toolchain: z.array(z.string()),
   resources: z.object({ cpu: z.string(), memory: z.string() }),
-  ports: z.object({ runner: z.number(), serve: z.number() }),
+  ports: z.object({ runner: z.number(), serve: z.number(), ide: z.number().optional() }),
   /** ACS 弹性算力调度（virtual-kubelet） */
   acs: z.boolean(),
 });
