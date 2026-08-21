@@ -208,6 +208,8 @@ export async function runTaskViaServe(
   const initId = await post('initialize', { protocolVersion: 1 });
   await wait(initId, 15_000);
   const ac = new AbortController();
+  // load 后的 replay 是历史回放，不能进 relay 日志（否则整段旧会话灌进执行日志/卡片）；prompt 发出后才开闸
+  const gate = { live: false };
   // 与 acpClient 同构：连接级 SSE（应答帧）+ load 后的 session 级 SSE（session/update 流）
   const openSse = (extra: Record<string, string> = {}): Promise<void> =>
     (async () => {
@@ -244,6 +246,7 @@ export async function runTaskViaServe(
             continue;
           }
           if (m.method !== 'session/update') continue;
+          if (!gate.live) continue;
           const u = ((m as { params?: { update?: Record<string, unknown> } }).params?.update) ?? {};
           const text = ((u.content as { text?: string } | undefined)?.text ?? (u.text as string | undefined)) ?? '';
           if (u.sessionUpdate === 'agent_message_chunk' && text) feed(text);
@@ -266,6 +269,7 @@ export async function runTaskViaServe(
       .catch(() => undefined);
     appendLog('sys', `task relay via serve: session/prompt (${sessionId.slice(0, 8)})`);
     const promptId = await post('session/prompt', { sessionId, prompt: [{ type: 'text', text: task }] });
+    gate.live = true;
     const resp = await wait(promptId, 30 * 60_000);
     if (resp.error) throw new Error('session/prompt 失败');
     const stop = ((resp.result as { stopReason?: string } | undefined)?.stopReason) ?? 'end_turn';
