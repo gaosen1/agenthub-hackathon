@@ -15,6 +15,8 @@ class FakeOrchestrator implements PodOrchestrator {
   pods = new Map<string, PodPhase>();
   secrets = new Map<string, Record<string, string>>();
   created: SandboxPodSpec[] = [];
+  /** 模拟集群 API 故障：getPodPhase 抛错（hf-f4da72 事故的回归开关） */
+  phaseError = false;
   async createPod(spec: SandboxPodSpec) {
     this.created.push(spec);
     this.pods.set(spec.podName, 'ready');
@@ -23,6 +25,7 @@ class FakeOrchestrator implements PodOrchestrator {
     this.pods.delete(name);
   }
   async getPodPhase(name: string): Promise<PodPhase> {
+    if (this.phaseError) throw new Error('api server unreachable');
     return this.pods.get(name) ?? 'gone';
   }
   async listSandboxPods() {
@@ -186,6 +189,26 @@ describe('worker 全链路', () => {
     runner.state.lastError = 'load exploded';
     await worker.tick(); // → packaging → failed（同 tick）
     expect(getHandoff(db, 'hf-000003')!.status).toBe('failed');
+  });
+
+  it('瞬断不误判：runner 不可达 + phase 查询抛错 → 保持 running（hf-f4da72 回归）', async () => {
+    insertHandoff(db, { id: 'hf-000004', task: 'x' });
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000004')!.status).toBe('running');
+    orch.phaseError = true;
+    runner.server.close(); // healthz 连接拒绝
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000004')!.status).toBe('running');
+  });
+
+  it('确失仍判死：runner 不可达 + phase=gone → failed', async () => {
+    insertHandoff(db, { id: 'hf-000005', task: 'x' });
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000005')!.status).toBe('running');
+    runner.server.close();
+    orch.pods.clear(); // Pod 真的没了
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000005')!.status).toBe('failed');
   });
 
   it('requestPackaging：running 的交互任务被 pull 触发收尾', async () => {

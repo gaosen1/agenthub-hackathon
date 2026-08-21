@@ -207,7 +207,7 @@ export class Worker {
   private async handleProvisioning(): Promise<void> {
     for (const h of listByStatus(this.db, 'provisioning')) {
       try {
-        const phase = await this.resolvePodPhase(h);
+        const phase = await this.resolvePodPhase(h).catch(() => 'pending' as const);
         if (phase === 'pending') continue;
         if (phase === 'failed' || phase === 'gone') {
           setStatus(this.db, h, 'failed', `pod ${phase}`);
@@ -271,8 +271,9 @@ export class Worker {
   private async handleRunning(): Promise<void> {
     const idleTtlMs = (this.cfg.idleTtlMinutes ?? 120) * 60_000;
     for (const h of listByStatus(this.db, 'running')) {
+      let runner: RunnerClient | undefined;
       try {
-        const runner = await this.runnerOf(h);
+        runner = await this.runnerOf(h);
         const health = await runner.healthz();
         await this.relayLogs(h, runner);
         if (health.lastError) {
@@ -296,9 +297,13 @@ export class Worker {
           continue;
         }
       } catch {
-        // runner 暂时不可达：保留状态下轮重试；Pod 消失由 recover/孤儿清理兜底
-        const phase = await this.resolvePodPhase(h).catch(() => 'gone' as const);
+        // runner 不可达：先区分「瞬断」与「确失」——
+        // phase 查询报错（网络抖动/API 故障）时保留状态下轮重试，绝不兜底成 gone，
+        // 避免把成功任务误判 failed（hf-f4da72 事故）；判死前先尽力补 relay 日志。
+        const phase = await this.resolvePodPhase(h).catch(() => undefined);
+        if (phase === undefined) continue;
         if (phase === 'gone' || phase === 'failed') {
+          if (runner) await this.relayLogs(h, runner).catch(() => undefined);
           setStatus(this.db, h, 'failed', 'sandbox pod lost');
           await this.safeDeletePod(h, 'pod-lost');
         }
@@ -371,7 +376,9 @@ export class Worker {
           setStatus(this.db, h, 'failed', 'recovered: no pod ref');
           continue;
         }
-        const phase = await this.resolvePodPhase(h).catch(() => 'gone' as const);
+        // 集群瞬断时 resolvePodPhase 抛错：保留状态，交给后续 tick/重启再判定
+        const phase = await this.resolvePodPhase(h).catch(() => undefined);
+        if (phase === undefined) continue;
         if (phase === 'gone' || phase === 'failed') {
           setStatus(this.db, h, 'failed', 'recovered: pod lost');
           await this.safeDeletePod(h, 'crash-recover');
