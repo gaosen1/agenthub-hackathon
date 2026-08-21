@@ -115,6 +115,11 @@ export async function deleteHandoff(id: string): Promise<void> {
   await hubFetch(`/api/handoffs/${id}`, () => undefined, { method: 'DELETE' });
 }
 
+/** Web Shell 入口（qwen-code 原生流式界面）；reachable=false 表示浏览器不可直达 */
+export async function fetchShellUrl(id: string): Promise<{ url: string; reachable: boolean }> {
+  return hubFetch(`/api/handoffs/${id}/shell-url`, (d) => d as { url: string; reachable: boolean });
+}
+
 export async function fetchHandoffDetail(id: string): Promise<HandoffDetail> {
   try {
     const data = await hubFetch(`/api/handoffs/${id}`, (d) => HandoffDetailSchema.parse(d));

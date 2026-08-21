@@ -501,6 +501,20 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     },
   });
 
+  // ── Web Shell 入口（qwen-code 原生流式界面）：serve 默认在根路径托管 web-shell，loopback 免认证 ──
+  app.get('/api/handoffs/:id/shell-url', async (req) => {
+    const h = ownHandoff(req);
+    if (h.kind !== 'web') throw fail(409, 'ERR_NOT_READY', 'web shell only for kind=web');
+    if (h.status !== 'running') throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
+    const sb = needSandbox();
+    if (!h.pod_name) throw fail(409, 'ERR_NOT_READY', 'sandbox not provisioned');
+    const url = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, 8081).catch((e: unknown) => {
+      throw fail(502, 'ERR_RUNNER', `shell unreachable: ${e instanceof Error ? e.message : String(e)}`);
+    });
+    // 浏览器须直达：port-forward 的 127.0.0.1 仅 hub 与浏览器同机时成立；Pod IP 需 hub 部署在集群内
+    return { url, reachable: url.startsWith('http://127.0.0.1') };
+  });
+
   // ── Bots（spec §4.2）──────────────────────────────────
   const toBot = (b: BotRow): Bot => ({
     id: b.id,

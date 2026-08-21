@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { HandoffDetail, HandoffEventsResp, SandboxEvent } from '@agenthub/shared/contracts';
-import { fetchHandoffEvents, useDataSource } from '../api/client.js';
+import { fetchHandoffEvents, fetchShellUrl, useDataSource } from '../api/client.js';
 import { AcpClient } from '../api/acpClient.js';
 import type { AcpCaps } from '../api/acpClient.js';
 import { useHandoffEvents, useHandoffs } from '../api/hooks.js';
@@ -247,6 +247,19 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
     if (e.key === 'ArrowRight') setChatW((v) => clampW(v - 24));
   };
 
+  const openShell = async (): Promise<void> => {
+    try {
+      const r = await fetchShellUrl(t.id);
+      if (!r.reachable) {
+        setMsgs((m) => [...m, { role: 'agent', text: '（Web Shell 不可直达：需 hub 与浏览器同机（port-forward），或 hub 部署在集群内）', time: nowHm() }]);
+        return;
+      }
+      window.open(r.url, '_blank', 'noopener');
+    } catch (e) {
+      setMsgs((m) => [...m, { role: 'agent', text: `（Web Shell 打开失败：${e instanceof Error ? e.message : String(e)}）`, time: nowHm() }]);
+    }
+  };
+
   const send = () => {
     const v = text.trim();
     if (!v || !canChat || busy) return;
@@ -349,6 +362,15 @@ export function ChatPanel({ detail: t }: { detail: HandoffDetail }) {
             <span className="live" style={{ color: 'var(--warn)', background: 'rgba(245,176,77,.1)' }}>
               连接中…
             </span>
+          )}
+          {isHub && canChat && (
+            <button className="shell-btn" title="在新标签页打开 qwen-code 原生 Web Shell（流式实时界面）" onClick={() => void openShell()}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <polyline points="4 17 10 11 4 5" />
+                <line x1="12" y1="19" x2="20" y2="19" />
+              </svg>
+              Web Shell
+            </button>
           )}
         </div>
         <div className="sess">

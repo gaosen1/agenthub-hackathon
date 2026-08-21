@@ -412,3 +412,7 @@ select.fi{width:auto;cursor:pointer}
 
 /* 侧栏 running 行的旋转状态 icon */
 .run-spin{display:inline-flex;align-items:center;color:var(--brand);margin-left:2px}
+
+/* 会话头 Web Shell 入口：发丝线 pill，MASTER 风格 */
+.shell-btn{margin-left:auto;display:inline-flex;align-items:center;gap:4px;border:1px solid var(--n-line2);background:transparent;color:var(--n-tx2);border-radius:999px;height:20px;padding:0 8px;font-size:11px;cursor:pointer;white-space:nowrap;flex-shrink:0}
+.shell-btn:hover{color:var(--n-tx);border-color:var(--n-tx3)}
