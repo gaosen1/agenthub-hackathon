@@ -143,7 +143,7 @@ export async function runTaskViaServe(
   serveToken?: string,
 ): Promise<number> {
   const base = 'http://127.0.0.1:8081';
-  const auth = serveToken ? { authorization: `Bearer ${serveToken}` } : {};
+  const auth: Record<string, string> = serveToken ? { authorization: `Bearer ${serveToken}` } : {};
   const headers: Record<string, string> = { 'content-type': 'application/json', ...auth };
   let rpcId = 0;
   const pending = new Map<number, (m: Record<string, unknown>) => void>();
