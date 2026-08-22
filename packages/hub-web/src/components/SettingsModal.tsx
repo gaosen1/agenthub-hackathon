@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react';
-import { getModelConfig, setModelConfig } from '../api/client.js';
+import { getModelConfig, setModelConfig, testModelConfig } from '../api/client.js';
 
-/** 模型凭证设置弹窗：per-user 隔离的 API Key / Base URL / Model 配置 */
+/** 常用 provider 预设：一键填充 baseUrl + 默认模型 */
+const PROVIDER_PRESETS = [
+  { name: 'IdeaLab（内网）', baseUrl: 'https://idealab.alibaba-inc.com/api/openai/v1', model: 'qwen3.8-max' },
+  { name: 'Token Plan', baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', model: 'qwen3.6-flash' },
+  { name: 'DashScope 公网', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3-coder-plus' },
+];
+
+/** 模型凭证设置弹窗：per-user 隔离的 API Key / Base URL / Model 配置，provider 频繁切换场景 */
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('https://dashscope.aliyuncs.com/compatible-mode/v1');
@@ -10,6 +17,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [testMsg, setTestMsg] = useState('');
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     void getModelConfig()
@@ -22,29 +31,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   }, []);
 
   const submit = async () => {
-    if (!apiKey.trim() && !hasKey) {
-      setErr('API Key 不能为空');
-      return;
-    }
     if (!baseUrl.trim() || !model.trim()) {
       setErr('Base URL 和模型名不能为空');
+      return;
+    }
+    if (!apiKey.trim() && !hasKey) {
+      setErr('API Key 不能为空');
       return;
     }
     setBusy(true);
     setErr('');
     setSaved(false);
     try {
-      // 已有 key 且 key 框为空 = 不修改 key，只更新 baseUrl/model
-      const keyToSubmit = apiKey.trim() || undefined;
-      if (keyToSubmit) {
-        await setModelConfig(keyToSubmit, baseUrl.trim(), model.trim());
-      } else {
-        // 只更新 baseUrl/model，需要重新提交完整表单
-        // 由于 API 要求 apiKey 必填，这里提示用户需要输入 key
-        setErr('如需修改 Base URL 或模型，请重新输入 API Key');
-        setBusy(false);
-        return;
-      }
+      // key 留空 = 保留已存密钥，仅切换 baseUrl/model（服务端支持）
+      await setModelConfig(baseUrl.trim(), model.trim(), apiKey.trim() || undefined);
       setHasKey(true);
       setApiKey('');
       setSaved(true);
@@ -52,6 +52,23 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       setErr(e instanceof Error ? e.message : '保存失败');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const test = async () => {
+    setTesting(true);
+    setTestMsg('');
+    try {
+      const r = await testModelConfig({
+        baseUrl: baseUrl.trim(),
+        model: model.trim(),
+        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+      });
+      setTestMsg(r.ok ? `✓ 连通（${r.latencyMs}ms）` : `✗ ${r.error ?? '连通失败'}`);
+    } catch (e) {
+      setTestMsg(`✗ ${e instanceof Error ? e.message : '测试失败'}`);
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -92,6 +109,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             autoFocus
           />
           <label style={{ fontSize: 12, color: 'var(--tx3)', display: 'block', marginBottom: 4 }}>API Base URL</label>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+            {PROVIDER_PRESETS.map((p) => (
+              <button
+                key={p.name}
+                className="btn"
+                style={{ padding: '2px 8px', fontSize: 11 }}
+                onClick={() => {
+                  setBaseUrl(p.baseUrl);
+                  setModel(p.model);
+                }}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
           <input
             className="fi"
             style={{ maxWidth: 'none', marginBottom: 10, width: '100%' }}
@@ -118,6 +150,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <button className="btn primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => void submit()} disabled={busy}>
             {busy ? '保存中…' : '保存'}
           </button>
+          <button className="btn" style={{ width: '100%', justifyContent: 'center', marginTop: 8 }} onClick={() => void test()} disabled={testing}>
+            {testing ? '测试中…' : '测试连通性'}
+          </button>
+          {testMsg && (
+            <div style={{ textAlign: 'center', marginTop: 8, fontSize: 12, color: testMsg.startsWith('✓') ? 'var(--ok)' : 'var(--err)' }}>{testMsg}</div>
+          )}
           <div style={{ textAlign: 'center', marginTop: 10, fontSize: 11, color: 'var(--tx3)' }}>
             凭证加密存储于 hub-server，创建 sandbox 时通过 K8s Secret 注入
           </div>

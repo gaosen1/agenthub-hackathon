@@ -12,8 +12,9 @@ import {
   HandoffEventsRespSchema,
   ListHandoffsRespSchema,
   RunnerIdeStatusRespSchema,
+  ModelTestRespSchema,
 } from '@agenthub/shared/contracts';
-import type { AuthResp, Bot, HandoffDetail, HandoffEventsResp, ListHandoffsResp, RunnerIdeStatusResp } from '@agenthub/shared/contracts';
+import type { AuthResp, Bot, HandoffDetail, HandoffEventsResp, ListHandoffsResp, ModelTestResp, RunnerIdeStatusResp } from '@agenthub/shared/contracts';
 import { useSyncExternalStore } from 'react';
 import { mockDetails, mockSummaries } from './mock.js';
 
@@ -180,11 +181,20 @@ export async function getModelConfig(): Promise<ModelConfig> {
   return hubFetch('/api/account/model', (d) => d as ModelConfig);
 }
 
-export async function setModelConfig(apiKey: string, baseUrl: string, model: string): Promise<void> {
+/** apiKey 缺省保留已存密钥——快速切换 provider 只改 baseUrl/model */
+export async function setModelConfig(baseUrl: string, model: string, apiKey?: string): Promise<void> {
   await hubFetch('/api/account/model', () => undefined, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ apiKey, baseUrl, model }),
+    body: JSON.stringify({ baseUrl, model, ...(apiKey ? { apiKey } : {}) }),
+  });
+}
+
+export async function testModelConfig(cfg?: { baseUrl?: string; model?: string; apiKey?: string }): Promise<ModelTestResp> {
+  return hubFetch('/api/account/model/test', (d) => ModelTestRespSchema.parse(d), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(cfg ?? {}),
   });
 }
 

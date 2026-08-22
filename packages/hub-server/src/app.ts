@@ -180,7 +180,11 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   app.put('/api/account/model', async (req, reply) => {
     const { uid } = requireAuth(req);
     const body = ModelConfigReqSchema.parse(req.body);
-    const enc = encryptSecret(body.apiKey, secret);
+    // apiKey 缺省保留已存密钥：快速切换 provider 只改 baseUrl/model
+    const prev = getUserModelConfig(db, uid);
+    const rawKey = body.apiKey ?? (prev?.model_api_key_enc ? decryptSecret(prev.model_api_key_enc, secret) : undefined);
+    if (!rawKey) throw fail(400, 'ERR_VALIDATION', 'apiKey required on first save');
+    const enc = encryptSecret(rawKey, secret);
     setUserModelConfig(db, uid, enc, body.baseUrl, body.model);
     return reply.send({ ok: true });
   });
@@ -193,6 +197,36 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       ...(mc?.model_base_url ? { baseUrl: mc.model_base_url } : {}),
       ...(mc?.model_name ? { model: mc.model_name } : {}),
     });
+  });
+
+  /** 连通性探测：以给定（或已存）凭证发一次最小 chat completion */
+  app.post('/api/account/model/test', async (req) => {
+    const { uid } = requireAuth(req);
+    const body = (req.body ?? {}) as { baseUrl?: string; model?: string; apiKey?: string };
+    const mc = getUserModelConfig(db, uid);
+    const baseUrl = body.baseUrl ?? mc?.model_base_url;
+    const model = body.model ?? mc?.model_name;
+    const key = body.apiKey ?? (mc?.model_api_key_enc ? decryptSecret(mc.model_api_key_enc, secret) : undefined);
+    if (!baseUrl || !model || !key) {
+      return { ok: false, error: 'baseUrl/model/apiKey 不完整' };
+    }
+    const t0 = Date.now();
+    try {
+      const r = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 4 }),
+        signal: AbortSignal.timeout(15000),
+      });
+      const latencyMs = Date.now() - t0;
+      if (!r.ok) {
+        return { ok: false, latencyMs, error: `HTTP ${r.status}: ${(await r.text()).slice(0, 120)}` };
+      }
+      await r.json().catch(() => undefined);
+      return { ok: true, latencyMs };
+    } catch (e) {
+      return { ok: false, latencyMs: Date.now() - t0, error: e instanceof Error ? e.message : String(e) };
+    }
   });
 
   const ownHandoff = (req: FastifyRequest): HandoffRow => {

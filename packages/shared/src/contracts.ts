@@ -9,3 +9,4 @@ export * from './runner.js';
 export * from './acp.js';
 // 显式 re-export：vite/esbuild 预打包不一定追踪 export * 下的新增符号
 export { RunnerIdeStatusRespSchema } from './runner.js';
+export { ModelTestRespSchema } from './dto.js';

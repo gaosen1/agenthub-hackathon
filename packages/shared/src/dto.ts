@@ -126,7 +126,8 @@ export type PullIntentResp = z.infer<typeof PullIntentRespSchema>;
 // ---------- 模型凭证（per-user 隔离）----------
 
 export const ModelConfigReqSchema = z.object({
-  apiKey: z.string().min(1),
+  /** 缺省时保留已存密钥——支持只切 baseUrl/model 的快速切换 */
+  apiKey: z.string().min(1).optional(),
   baseUrl: z.string().url(),
   model: z.string().min(1),
 });
@@ -137,6 +138,14 @@ export const ModelConfigRespSchema = z.object({
   baseUrl: z.string().optional(),
   model: z.string().optional(),
 });
+
+/** POST /api/account/model/test 响应：服务端真实连通性探测 */
+export const ModelTestRespSchema = z.object({
+  ok: z.boolean(),
+  latencyMs: z.number().optional(),
+  error: z.string().optional(),
+});
+export type ModelTestResp = z.infer<typeof ModelTestRespSchema>;
 export type ModelConfigResp = z.infer<typeof ModelConfigRespSchema>;
 
 // ---------- Bot ----------
