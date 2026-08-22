@@ -10,6 +10,8 @@ export interface RunnerState {
   /** Web IDE（code-server）是否已就绪，进程句柄在 ide.ts */
   ideReady: boolean;
   loadedHandoffId?: string;
+  /** 已加载工作区（/ide/ensure 需要） */
+  workspacePath?: string;
   lastError?: string;
   loading: boolean;
 }

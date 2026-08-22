@@ -11,9 +11,9 @@ import { execFile as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, computeLockHash, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
 import { allLogs, appendLog, logsAfter, state } from './state.js';
-import { codeServerInstalled, ensureIde, ideStatus } from './ide.js';
 import { runTask, runTaskViaServe, startServe, stopServe, waitServeReady } from './qwen.js';
 import { startShellProxy } from './shell-proxy.js';
+import { ensureIde, ideStatus } from './ide.js';
 import {
   buildDepsCache,
   buildOutput,
@@ -172,6 +172,7 @@ export function buildRunner(): FastifyInstance {
         await downloadTo(body.inputUrl, tarball);
         manifest = await unpackInput(tarball, staging);
         state.loadedHandoffId = manifest.handoffId;
+        state.workspacePath = manifest.workspacePath;
         appendLog('sys', `restoring workspace ${manifest.workspacePath} (${manifest.wsHash})`);
         await restoreContext(staging, manifest, await warmDl);
         if (await depsDl) {
@@ -222,7 +223,7 @@ export function buildRunner(): FastifyInstance {
         await startServe({ mode: 'web', workspacePath: manifest.workspacePath, serveToken });
         await waitServeReady('web');
         // 8082 头部改写代理：剥 serve 的 frame-ancestors 'none'，侧栏 iframe 可达
-        startShellProxy(8081, 8082);
+        startShellProxy(Number(process.env.AGENTHUB_SERVE_PORT ?? 8081), 8082);
         state.serveReady = true;
         appendLog('ok', 'qwen serve ready');
         if (body.task) {
@@ -355,24 +356,25 @@ export function buildRunner(): FastifyInstance {
     return reply.send({ ok: true, sessionId });
   });
 
+  // ── Web IDE（code-server）控制面：hub 经此拉起/查询 :8083 ──
+  app.post('/ide/ensure', async (_req, reply) => {
+    if (!state.loadedHandoffId || !state.workspacePath) {
+      return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'workspace not loaded' } });
+    }
+    const st = await ensureIde(state.workspacePath);
+    state.ideReady = st.ready;
+    if (!st.ready) {
+      return reply.status(409).send({ error: { code: 'ERR_NOT_READY', message: st.error ?? 'ide not ready' } });
+    }
+    return reply.send(st);
+  });
+
+  app.get('/ide/status', async (_req, reply) => reply.send(ideStatus()));
+
   app.get('/logs', async (req, reply) => {
     const after = Number((req.query as { after?: string }).after ?? 0) || 0;
     return reply.send(logsAfter(after));
   });
-
-  // Web IDE：按需从 NAS 共享层拉起 code-server（:8083）打开当前工作区，幂等
-  app.post('/ide/ensure', async (_req, reply) => {
-    const ws = manifest?.workspacePath ?? botWorkspace?.workspacePath;
-    if (!ws) return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'no workspace loaded' } });
-    if (!codeServerInstalled()) {
-      return reply.status(409).send({ error: { code: 'ERR_NOT_READY', message: 'code-server not preinstalled on shared layer' } });
-    }
-    const st = await ensureIde(ws);
-    if (!st.ready) return reply.status(502).send({ error: { code: 'ERR_RUNNER', message: st.error ?? 'code-server start failed' } });
-    return reply.send(st);
-  });
-
-  app.get('/ide/status', async () => ideStatus());
 
   return app;
 }
