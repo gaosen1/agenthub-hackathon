@@ -23,6 +23,7 @@ import {
   type HandoffResult,
   type HandoffStatus,
   type HandoffSummary,
+  type RunnerIdeStatusResp,
   type SandboxPolicy,
 } from '@agenthub/shared';
 import type { DB } from './db.js';
@@ -30,9 +31,10 @@ import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
 import { ossKeyOf, assertOwnedKey, userPrefix, asOssClient, depsCacheKeyOf, depsSidecarKeyOf, warmBundleKeyOf, warmSidecarKeyOf, SIGNED_URL_TTL_SECONDS, type OssSigner, type OssClient } from './oss.js';
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
-import { getBot, getUserModelConfig, getSettings, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setSetting, setHandoffArchived, deleteHandoffRow, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
+import { getBot, getHandoff, getUserModelConfig, getSettings, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setSetting, setHandoffArchived, deleteHandoffRow, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
 import { userModelSecret } from './db.js';
-import { RunnerClient } from './runner-client.js';
+import { RunnerClient, RunnerError } from './runner-client.js';
+import { IDE_COOKIE, IDE_COOKIE_TTL_SECONDS, pipeHttp, pipeUpgrade, verifyIdeToken } from './ide-proxy.js';
 import type { SandboxConnector } from './connector.js';
 import { SANDBOX_PORTS, SANDBOX_RESOURCES, SANDBOX_TEMPLATE, sandboxImage, type PodOrchestrator } from './k8s.js';
 import { DEFAULT_ORPHAN_INTERVAL_MS, DEFAULT_WORKER_INTERVAL_MS, type Worker } from './worker.js';
@@ -523,6 +525,83 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     }
     // 浏览器须直达：port-forward 的 127.0.0.1 仅 hub 与浏览器同机时成立；Pod IP 需 hub 部署在集群内
     return { url, reachable: ok && url.startsWith('http://127.0.0.1') };
+  });
+
+  // ── Web IDE（code-server）透明反代：ensure 下发 HttpOnly Cookie，后续请求 Cookie/Bearer 双鉴权 ──
+  const tvOf = (uid: number): number | undefined =>
+    (db.prepare('SELECT token_version FROM users WHERE id=?').get(uid) as { token_version: number } | undefined)?.token_version;
+  const ideAuthOf = (req: { headers: Record<string, string | string[] | undefined> }): number | null => verifyIdeToken(req.headers, secret, tvOf);
+
+  app.post('/api/handoffs/:id/ide/ensure', async (req, reply) => {
+    const { uid } = requireAuth(req);
+    const h = ownHandoff(req);
+    if (h.status !== 'running') throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
+    const sb = needSandbox();
+    if (!h.pod_name) throw fail(409, 'ERR_NOT_READY', 'sandbox not provisioned');
+    const base = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, SANDBOX_PORTS.runner);
+    const runner = new RunnerClient(base, h.runner_token);
+    let status: RunnerIdeStatusResp;
+    try {
+      status = await runner.ensureIde();
+    } catch (e) {
+      if (e instanceof RunnerError && e.status === 409) throw fail(409, 'ERR_NOT_READY', e.message);
+      throw e;
+    }
+    const tok = signJwt({ uid, sub: 'ide', tv: tvOf(uid) ?? 1 }, secret);
+    reply.header('set-cookie', `${IDE_COOKIE}=${tok}; HttpOnly; Path=/; Max-Age=${IDE_COOKIE_TTL_SECONDS}; SameSite=Lax`);
+    return status;
+  });
+
+  app.route({
+    method: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    url: '/api/handoffs/:id/ide/*',
+    handler: async (req, reply) => {
+      const uid = ideAuthOf(req);
+      if (uid === null) throw fail(401, 'ERR_AUTH', 'IDE credentials required');
+      const id = (req.params as { id: string }).id;
+      const h = getHandoff(db, id);
+      if (!h || h.user_id !== uid) throw fail(404, 'ERR_NOT_FOUND', 'handoff not found');
+      if (h.status !== 'running' || !h.pod_name) throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
+      const sb = needSandbox();
+      const upstreamBase = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, SANDBOX_PORTS.ide);
+      const prefix = `/api/handoffs/${id}/ide`;
+      const upstreamPath = req.url.slice(prefix.length) || '/';
+      reply.hijack();
+      pipeHttp(req.raw, reply.raw, upstreamBase, upstreamPath, prefix);
+    },
+  });
+
+  // 根逃逸兼容：code-server 偶发根绝对资源请求；带活跃 Cookie 时 302 回该用户最近 running handoff 的前缀路径
+  app.addHook('onRequest', async (req, reply) => {
+    if (req.url.startsWith('/api')) return;
+    const uid = verifyIdeToken(req.headers, secret, tvOf);
+    if (uid === null) return;
+    const row = db
+      .prepare("SELECT id FROM handoffs WHERE user_id=? AND status='running' AND kind='web' AND pod_name IS NOT NULL ORDER BY updated_at DESC LIMIT 1")
+      .get(uid) as { id: string } | undefined;
+    if (!row) return;
+    await reply.redirect(`/api/handoffs/${row.id}/ide${req.url}`, 302);
+  });
+
+  // WebSocket upgrade（code-server 终端/重连）：fastify 路由不接管 upgrade，手动挂 server 事件
+  app.server.on('upgrade', (req, socket, head) => {
+    const m = /^\/api\/handoffs\/([^/]+)\/ide(\/.*)?$/.exec(req.url ?? '');
+    if (!m) return;
+    const uid = verifyIdeToken(req.headers, secret, tvOf);
+    const h = uid !== null ? getHandoff(db, m[1]!) : undefined;
+    if (uid === null || !h || h.user_id !== uid || h.status !== 'running' || !h.pod_name) {
+      socket.destroy();
+      return;
+    }
+    const sb = sandbox;
+    if (!sb) {
+      socket.destroy();
+      return;
+    }
+    sb.connector
+      .getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, SANDBOX_PORTS.ide)
+      .then((base) => pipeUpgrade(req.headers, socket, head, base, m[2] || '/'))
+      .catch(() => socket.destroy());
   });
 
   // ── Bots（spec §4.2）──────────────────────────────────

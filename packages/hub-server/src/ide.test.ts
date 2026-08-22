@@ -95,6 +95,7 @@ beforeEach(async () => {
   db = openDb(':memory:');
   const connector: SandboxConnector = {
     getBaseUrl: async (_pod: PodRef, port: number) => (port === 8080 ? runnerUrl : ideUrl),
+    invalidate: () => undefined,
     dispose: async () => undefined,
   };
   app = buildApp({

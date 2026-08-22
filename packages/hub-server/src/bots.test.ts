@@ -270,7 +270,7 @@ describe('GET /api/sandboxes（S9）', () => {
     expect(body.template!.image).toBe('test/sandbox:itest');
     expect(body.template!.baseImage).toBe('node:22-slim');
     expect(body.template!.resources).toEqual({ cpu: '2', memory: '4Gi' });
-    expect(body.template!.ports).toEqual({ runner: 8080, serve: 8081, ide: 8083 });
+    expect(body.template!.ports).toEqual({ runner: 8080, serve: 8081, shellProxy: 8082, ide: 8083 });
     expect(body.template!.toolchain).toContain('git');
     expect(body.policy.defaultTimeoutMinutes).toBe(30);
     expect(body.policy.orphanIntervalMs).toBe(600_000);
