@@ -20,6 +20,7 @@ class FakeOrchestrator implements PodOrchestrator {
   async createPod(spec: SandboxPodSpec) {
     this.created.push(spec);
     this.pods.set(spec.podName, 'ready');
+    return spec.podName;
   }
   async deletePod(name: string) {
     this.pods.delete(name);
@@ -40,6 +41,7 @@ class FakeOrchestrator implements PodOrchestrator {
   async createDeployment(spec: SandboxPodSpec) {
     this.created.push(spec);
     this.pods.set(spec.podName, 'ready');
+    return spec.podName;
   }
   async deleteDeployment(name: string) {
     this.pods.delete(name);

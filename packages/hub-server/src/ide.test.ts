@@ -18,7 +18,9 @@ const fakeSigner: OssSigner = {
 };
 
 class FakeOrchestrator implements PodOrchestrator {
-  async createPod(_spec: SandboxPodSpec): Promise<void> {}
+  async createPod(_spec: SandboxPodSpec): Promise<string> {
+    return _spec.podName;
+  }
   async deletePod(_name: string): Promise<void> {}
   async getPodPhase(_name: string): Promise<PodPhase> {
     return 'ready';
@@ -28,8 +30,8 @@ class FakeOrchestrator implements PodOrchestrator {
   }
   async createSecret(_name: string, _data: Record<string, string>): Promise<void> {}
   async deleteSecret(_name: string): Promise<void> {}
-  async createDeployment(spec: SandboxPodSpec): Promise<void> {
-    await this.createPod(spec);
+  async createDeployment(spec: SandboxPodSpec): Promise<string> {
+    return await this.createPod(spec);
   }
   async deleteDeployment(_name: string): Promise<void> {}
   async findPodNameByLabel(_labels: Record<string, string>): Promise<string | undefined> {

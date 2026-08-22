@@ -185,7 +185,7 @@ export class Worker {
       });
       try {
         const modelRefs = await this.ensureModelSecret(h.user_id);
-        await this.orchestrator.createPod({
+        const actualPod = await this.orchestrator.createPod({
           podName,
           mode: 'web',
           env: {
@@ -198,7 +198,7 @@ export class Worker {
           secretRefs: modelRefs,
           labels: { 'agenthub/kind': 'web', 'agenthub/owner': String(h.user_id), 'agenthub/handoff': h.id },
         });
-        patchHandoff(this.db, h.id, { pod_name: podName, serve_token: serveToken, runner_token: runnerToken });
+        patchHandoff(this.db, h.id, { pod_name: actualPod, serve_token: serveToken, runner_token: runnerToken });
         this.provisionRetries.delete(h.id);
         setStatus(this.db, h, 'provisioning');
       } catch (e) {

@@ -674,16 +674,16 @@ export function buildApp(opts: AppOptions): FastifyInstance {
           DINGTALK_CLIENT_ID: body.clientId,
           DINGTALK_CLIENT_SECRET: decryptSecret(encryptSecret(body.clientSecret, secret), secret),
         });
-        // bot 用 Deployment（非 raw Pod）：ACS 驱逐后自动重建
-        await sandbox.orchestrator.createDeployment({
+        // bot 用 Deployment（非 raw Pod）：ACS 驱逐后自动重建；Aone 后端返回 sandboxId
+        const actualDeploy = await sandbox.orchestrator.createDeployment({
           podName: deployName,
           mode: 'bot',
           env: { RUNNER_TOKEN: runnerToken, BOT_NAME: body.name },
           secretRefs: [...modelRefs, `bot-${id}`],
           labels: { 'agenthub/kind': 'bot', 'agenthub/owner': String(uid), 'agenthub/bot': String(id) },
         });
-        db.prepare("UPDATE bots SET pod_name=?, runner_token=?, status='running' WHERE id=?").run(deployName, runnerToken, id);
-        recordSandboxReady(db, deployName);
+        db.prepare("UPDATE bots SET pod_name=?, runner_token=?, status='running' WHERE id=?").run(actualDeploy, runnerToken, id);
+        recordSandboxReady(db, actualDeploy);
       } catch (e) {
         db.prepare("UPDATE bots SET status='error' WHERE id=?").run(id);
         const m = e instanceof Error ? e.message : String(e);

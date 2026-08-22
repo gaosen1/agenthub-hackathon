@@ -32,6 +32,7 @@ class FakeOrchestrator implements PodOrchestrator {
   pods = new Map<string, PodPhase>();
   async createPod(spec: SandboxPodSpec) {
     this.pods.set(spec.podName, 'ready');
+    return spec.podName;
   }
   async deletePod(name: string) {
     this.pods.delete(name);
@@ -46,6 +47,7 @@ class FakeOrchestrator implements PodOrchestrator {
   async deleteSecret() {}
   async createDeployment(spec: SandboxPodSpec) {
     this.pods.set(spec.podName, 'ready');
+    return spec.podName;
   }
   async deleteDeployment(name: string) {
     this.pods.delete(name);

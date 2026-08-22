@@ -33,14 +33,15 @@ export interface SandboxPodSpec {
 }
 
 export interface PodOrchestrator {
-  createPod(spec: SandboxPodSpec): Promise<void>;
+  /** 返回后端实际实例名（K8s=spec.podName；Aone=sandboxId），调用方以此落 pod_name */
+  createPod(spec: SandboxPodSpec): Promise<string>;
   deletePod(podName: string): Promise<void>;
   getPodPhase(podName: string): Promise<PodPhase>;
   listSandboxPods(): Promise<SandboxPodInfo[]>;
   createSecret(name: string, data: Record<string, string>): Promise<void>;
   deleteSecret(name: string): Promise<void>;
-  /** bot 模式：创建 Deployment（自动重建 Pod），存储 deployment 名为 pod_name */
-  createDeployment(spec: SandboxPodSpec): Promise<void>;
+  /** bot 模式：创建 Deployment（自动重建 Pod），返回实例名 */
+  createDeployment(spec: SandboxPodSpec): Promise<string>;
   /** bot 模式：删除 Deployment */
   deleteDeployment(name: string): Promise<void>;
   /** 按 label 查找实际运行中的 Pod 名（Deployment 重建后 Pod 名变化，用 label 定位） */
@@ -123,7 +124,7 @@ export class K8sOrchestrator implements PodOrchestrator {
     return this.core;
   }
 
-  async createPod(spec: SandboxPodSpec): Promise<void> {
+  async createPod(spec: SandboxPodSpec): Promise<string> {
     const overlay = this.configMapOverlay();
     const vols = buildSandboxVolumes(this.cfg, overlay);
     const pod: k8s.V1Pod = {
@@ -170,6 +171,7 @@ export class K8sOrchestrator implements PodOrchestrator {
       },
     };
     await withRetry(() => this.core.createNamespacedPod({ namespace: this.cfg.namespace, body: pod }));
+    return spec.podName;
   }
 
   async deletePod(podName: string): Promise<void> {
@@ -205,7 +207,7 @@ export class K8sOrchestrator implements PodOrchestrator {
   }
 
   /** bot 模式：创建 Deployment（ACS 驱逐后自动重建 Pod） */
-  async createDeployment(spec: SandboxPodSpec): Promise<void> {
+  async createDeployment(spec: SandboxPodSpec): Promise<string> {
     const overlay = this.configMapOverlay();
     const vols = buildSandboxVolumes(this.cfg, overlay);
     const deploy: k8s.V1Deployment = {
@@ -259,6 +261,7 @@ export class K8sOrchestrator implements PodOrchestrator {
       },
     };
     await withRetry(() => this.apps.createNamespacedDeployment({ namespace: this.cfg.namespace, body: deploy }));
+    return spec.podName;
   }
 
   /** ConfigMap 叠加层：挂载最新编译的 runner 模块，免重建镜像（web Pod 与 bot Deployment 同享） */
