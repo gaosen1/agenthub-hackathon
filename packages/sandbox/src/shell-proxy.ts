@@ -23,6 +23,20 @@ export function startShellProxy(targetPort: number, listenPort: number, runnerPo
     const proxyReq = request(
       { host: '127.0.0.1', port, method: req.method, path, headers },
       (pr) => {
+        if (isRunner) {
+          // Aone tengine 网关对 fastify 原始响应头不兼容（实测空 200）：缓冲后以最小头重发
+          const chunks: Buffer[] = [];
+          pr.on('data', (c: Buffer) => chunks.push(c));
+          pr.on('end', () => {
+            const body = Buffer.concat(chunks);
+            res.writeHead(pr.statusCode ?? 502, {
+              'content-type': (pr.headers['content-type'] as string | undefined) ?? 'application/json',
+              'content-length': String(body.length),
+            });
+            res.end(body);
+          });
+          return;
+        }
         const headers = { ...pr.headers };
         for (const h of STRIP_HEADERS) delete headers[h];
         res.writeHead(pr.statusCode ?? 502, headers);
