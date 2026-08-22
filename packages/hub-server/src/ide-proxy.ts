@@ -11,8 +11,9 @@ import { verifyJwt } from './auth.js';
 export const IDE_COOKIE = 'ah_ide';
 export const IDE_COOKIE_TTL_SECONDS = 2 * 3600;
 
-/** 逐跳头与 Hub 侧凭证不转发给上游 */
-const SKIP_REQ_HEADERS = new Set(['connection', 'keep-alive', 'host', 'cookie', 'authorization', 'upgrade']);
+/** 逐跳头与 Hub 侧凭证不转发给上游；origin 也剩掉：子路径代理下浏览器 Origin（hub 域）
+ * 与上游 Host 不一致，code-server 会静默拒绝 WS 握手导致永久挂起 */
+const SKIP_REQ_HEADERS = new Set(['connection', 'keep-alive', 'host', 'cookie', 'authorization', 'upgrade', 'origin']);
 const SKIP_RES_HEADERS = new Set(['connection', 'keep-alive', 'transfer-encoding']);
 
 export function parseCookies(header: string | undefined): Record<string, string> {
