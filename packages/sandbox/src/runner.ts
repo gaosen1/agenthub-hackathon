@@ -267,7 +267,8 @@ export function buildRunner(): FastifyInstance {
             if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
             appendLog(code === 0 ? 'ok' : 'err', `task relay finished (exit ${code})`);
             // 终态主动推群总结（钉钉 OpenAPI；未配置凭证/无绑定群时静默 no-op）
-            const notifyChats = [...existingChats];
+            // 终态时重取群列表：任务期间新 @ 绑定的群也要收到总结
+            const notifyChats = await listChats(qwenHome(), dHash);
             if (body.bindChatId && !notifyChats.some((c) => c.chatId === body.bindChatId)) {
               notifyChats.push({ chatId: body.bindChatId });
             }
