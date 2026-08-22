@@ -532,6 +532,22 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     (db.prepare('SELECT token_version FROM users WHERE id=?').get(uid) as { token_version: number } | undefined)?.token_version;
   const ideAuthOf = (req: { headers: Record<string, string | string[] | undefined> }): number | null => verifyIdeToken(req.headers, secret, tvOf);
 
+  /** IDE 隧道探针+重建（同 shell-url 模式）：port-forward 被瞬断污染时废弃重建，最多 3 轮 */
+  const ideTunnelOf = async (podName: string): Promise<string> => {
+    const sb = needSandbox();
+    const pod = { namespace: sb.namespace, podName };
+    let base = '';
+    for (let i = 0; i < 3; i++) {
+      base = await sb.connector.getBaseUrl(pod, SANDBOX_PORTS.ide);
+      const ok = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(5000) })
+        .then((r) => r.ok)
+        .catch(() => false);
+      if (ok) return base;
+      sb.connector.invalidate(pod, SANDBOX_PORTS.ide);
+    }
+    return base;
+  };
+
   app.post('/api/handoffs/:id/ide/ensure', async (req, reply) => {
     const { uid } = requireAuth(req);
     const h = ownHandoff(req);
@@ -563,7 +579,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       if (!h || h.user_id !== uid) throw fail(404, 'ERR_NOT_FOUND', 'handoff not found');
       if (h.status !== 'running' || !h.pod_name) throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
       const sb = needSandbox();
-      const upstreamBase = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, SANDBOX_PORTS.ide);
+      const upstreamBase = await ideTunnelOf(h.pod_name);
       const prefix = `/api/handoffs/${id}/ide`;
       const upstreamPath = req.url.slice(prefix.length) || '/';
       reply.hijack();
@@ -602,8 +618,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       socket.destroy();
       return;
     }
-    sb.connector
-      .getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, SANDBOX_PORTS.ide)
+    ideTunnelOf(h.pod_name)
       .then((base) => pipeUpgrade(req.headers, socket, head, base, m[2] || '/'))
       .catch(() => socket.destroy());
   });

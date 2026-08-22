@@ -57,6 +57,9 @@ export class PortForwardConnector implements SandboxConnector {
     if (existing) return `http://127.0.0.1:${existing.localPort}`;
 
     const server = createServer((socket: Socket) => {
+      // 客户端侧 socket 断连（浏览器关闭/网络抖动）会 emit 'error'，
+      // 无监听时直接 crash 整个 hub 进程；这里静默销毁即可
+      socket.on('error', () => socket.destroy());
       this.pf
         .portForward(pod.namespace, pod.podName, [port], socket, null, socket)
         .catch(() => socket.destroy());
