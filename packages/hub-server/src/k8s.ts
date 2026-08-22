@@ -124,7 +124,8 @@ export class K8sOrchestrator implements PodOrchestrator {
   }
 
   async createPod(spec: SandboxPodSpec): Promise<void> {
-    const vols = buildSandboxVolumes(this.cfg);
+    const overlay = this.configMapOverlay();
+    const vols = buildSandboxVolumes(this.cfg, overlay);
     const pod: k8s.V1Pod = {
       metadata: {
         name: spec.podName,
@@ -146,6 +147,7 @@ export class K8sOrchestrator implements PodOrchestrator {
             image: this.cfg.image,
             imagePullPolicy: 'IfNotPresent',
             ports: [{ containerPort: SANDBOX_PORTS.runner }, { containerPort: SANDBOX_PORTS.serve }, { containerPort: SANDBOX_PORTS.ide }],
+            ...(overlay ? { command: overlay.command, args: overlay.args } : {}),
             ...(vols ? { volumeMounts: vols.volumeMounts } : {}),
             env: Object.entries({
               RUNNER_MODE: spec.mode,
@@ -259,7 +261,7 @@ export class K8sOrchestrator implements PodOrchestrator {
     await withRetry(() => this.apps.createNamespacedDeployment({ namespace: this.cfg.namespace, body: deploy }));
   }
 
-  /** ConfigMap 叠加层：挂载最新 runner.js/context.js，免重建镜像 */
+  /** ConfigMap 叠加层：挂载最新编译的 runner 模块，免重建镜像（web Pod 与 bot Deployment 同享） */
   private configMapOverlay(): { volumes: k8s.V1Volume[]; volumeMounts: k8s.V1VolumeMount[]; command: string[]; args: string[] } | undefined {
     if (!this.cfg.configMapName) return undefined;
     const volName = 'runner-cm';
@@ -267,7 +269,12 @@ export class K8sOrchestrator implements PodOrchestrator {
       volumes: [{ name: volName, configMap: { name: this.cfg.configMapName } }],
       volumeMounts: [{ name: volName, mountPath: '/tmp/runner-cm' }],
       command: ['sh', '-c'],
-      args: ['cp /tmp/runner-cm/runner.js /app/dist/runner.js && cp /tmp/runner-cm/context.js /app/dist/context.js && exec node /app/dist/runner.js'],
+      // 只覆盖 ConfigMap 里实际提供的模块，其余沿用镜像内置版本
+      args: [
+        'for f in runner.js context.js ide.js state.js qwen.js shell-proxy.js; do ' +
+          '[ -f /tmp/runner-cm/$f ] && cp /tmp/runner-cm/$f /app/dist/$f; done; ' +
+          'exec node /app/dist/runner.js',
+      ],
     };
   }
 
