@@ -14,6 +14,17 @@ import { AoneConnector, AoneOrchestrator, aoneDeps } from './aone.js';
 import { Worker } from './worker.js';
 import { Notifier } from './notifier.js';
 
+// fetch（undici）默认不读代理 env：Aone 网关 *.agent.alibaba-inc.com 仅办公网代理可达，
+// 装上 EnvHttpProxyAgent（尊重 no_proxy，aliyuncs.com 等直照直连）
+if (process.env.https_proxy || process.env.HTTPS_PROXY) {
+  try {
+    const { setGlobalDispatcher, EnvHttpProxyAgent } = await import('undici');
+    setGlobalDispatcher(new EnvHttpProxyAgent());
+  } catch (e) {
+    console.warn(`proxy dispatcher unavailable: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 const PORT = Number(process.env.HUB_PORT ?? 4180);
 const DB_PATH = process.env.HUB_DB_PATH ?? './data/hub.sqlite';
 const SECRET = process.env.HUB_SECRET_KEY;
