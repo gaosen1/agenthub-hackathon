@@ -55,3 +55,46 @@ export function startShellProxy(targetPort: number, listenPort: number): void {
     singleton = server;
   });
 }
+
+let runnerSingleton: Server | null = null;
+
+/**
+ * runner API 绕行代理：Aone 入口网关对 8080 端口有特殊处理（实测空 200，疑 execd 保留），
+ * 裸代理 8085→8080 透明转发（含 WS），网关侧改走 8085。
+ */
+export function startRunnerProxy(targetPort: number, listenPort: number): void {
+  if (runnerSingleton) return;
+  const server = createServer((req, res) => {
+    const proxyReq = request(
+      { host: '127.0.0.1', port: targetPort, method: req.method, path: req.url, headers: req.headers },
+      (pr) => {
+        res.writeHead(pr.statusCode ?? 502, pr.headers);
+        pr.on('data', (c: Buffer) => res.write(c));
+        pr.on('end', () => res.end());
+      },
+    );
+    proxyReq.on('error', () => {
+      if (!res.headersSent) res.writeHead(502);
+      res.end('runner proxy error');
+    });
+    req.pipe(proxyReq);
+  });
+  server.on('upgrade', (req, socket, head) => {
+    const up = connect(targetPort, '127.0.0.1', () => {
+      const lines = [`${req.method} ${req.url} HTTP/1.1`];
+      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+      up.write(lines.join('\r\n') + '\r\n\r\n');
+      if (head.length) up.write(head);
+      up.pipe(socket);
+      socket.pipe(up);
+    });
+    up.on('error', () => socket.destroy());
+    socket.on('error', () => up.destroy());
+  });
+  server.on('error', () => {
+    runnerSingleton = null;
+  });
+  server.listen(listenPort, '0.0.0.0', () => {
+    runnerSingleton = server;
+  });
+}

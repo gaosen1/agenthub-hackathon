@@ -175,8 +175,10 @@ export class AoneConnector implements SandboxConnector {
   }
 
   async getBaseUrl(pod: PodRef, port: number): Promise<string> {
+    // Aone 入口网关对 8080 有特殊处理（实测空 200）：runner 在沙箱内另经 8085 绕行代理暴露
+    const actual = port === 8080 ? 8085 : port;
     const sb = await this.orch.handle(pod.podName);
-    return await sb.getEndpointUrl(port);
+    return await sb.getEndpointUrl(actual);
   }
 
   invalidate(): void {
