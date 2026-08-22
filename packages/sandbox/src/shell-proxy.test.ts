@@ -8,9 +8,11 @@ import { startShellProxy } from './shell-proxy.js';
 
 const PROXY_PORT = 8082;
 let upstreamPort: number;
+let lastHost = '';
 
 beforeAll(async () => {
-  const up = createServer((_q, s) => {
+  const up = createServer((q, s) => {
+    lastHost = String(q.headers.host ?? '');
     s.writeHead(200, {
       'content-type': 'text/html',
       'content-security-policy': "frame-ancestors 'none'",
@@ -32,5 +34,10 @@ describe('shell-proxy', () => {
     expect(r.headers.get('x-frame-options')).toBeNull();
     expect(r.headers.get('content-type')).toContain('text/html');
     expect(await r.text()).toBe('<html>shell</html>');
+  });
+
+  it('Host 改写为真实目标——qwen serve（vite 内核）否则 403 Invalid Host', async () => {
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/`, { headers: { host: `127.0.0.1:${PROXY_PORT}` } });
+    expect(lastHost).toBe(`127.0.0.1:${upstreamPort}`);
   });
 });

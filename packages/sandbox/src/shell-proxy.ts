@@ -14,8 +14,10 @@ let singleton: Server | null = null;
 export function startShellProxy(targetPort: number, listenPort: number): void {
   if (singleton) return; // 模块级单例：重复 /load 不二次 bind
   const server = createServer((req, res) => {
+    // qwen serve（vite 内核）校验 Host：客户端原始 Host 带代理端口会被 403 Invalid Host，改写为真实目标
+    const headers = { ...req.headers, host: `127.0.0.1:${targetPort}` };
     const proxyReq = request(
-      { host: '127.0.0.1', port: targetPort, method: req.method, path: req.url, headers: req.headers },
+      { host: '127.0.0.1', port: targetPort, method: req.method, path: req.url, headers },
       (pr) => {
         const headers = { ...pr.headers };
         for (const h of STRIP_HEADERS) delete headers[h];
@@ -33,7 +35,11 @@ export function startShellProxy(targetPort: number, listenPort: number): void {
   server.on('upgrade', (req, socket, head) => {
     const up = connect(targetPort, '127.0.0.1', () => {
       const lines = [`${req.method} ${req.url} HTTP/1.1`];
-      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+      for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        if (req.rawHeaders[i]!.toLowerCase() === 'host') continue; // 同 HTTP 路径：Host 改写
+        lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+      }
+      lines.push(`host: 127.0.0.1:${targetPort}`);
       up.write(lines.join('\r\n') + '\r\n\r\n');
       if (head.length) up.write(head);
       up.pipe(socket);
