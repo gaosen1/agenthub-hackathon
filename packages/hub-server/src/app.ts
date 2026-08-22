@@ -554,15 +554,21 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     if (h.status !== 'running') throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
     const sb = needSandbox();
     if (!h.pod_name) throw fail(409, 'ERR_NOT_READY', 'sandbox not provisioned');
-    const base = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, SANDBOX_PORTS.runner);
-    const runner = new RunnerClient(base, h.runner_token);
-    let status: RunnerIdeStatusResp;
-    try {
-      status = await runner.ensureIde();
-    } catch (e) {
-      if (e instanceof RunnerError && e.status === 409) throw fail(409, 'ERR_NOT_READY', e.message);
-      throw e;
+    // runner 隧道同样会被瞬断污染：探针失败即 invalidate 重建，最多 3 轮（同 shell-url 模式）
+    const pod = { namespace: sb.namespace, podName: h.pod_name };
+    let status: RunnerIdeStatusResp | undefined;
+    let lastErr: unknown;
+    for (let i = 0; i < 3 && !status; i++) {
+      const base = await sb.connector.getBaseUrl(pod, SANDBOX_PORTS.runner);
+      try {
+        status = await new RunnerClient(base, h.runner_token).ensureIde();
+      } catch (e) {
+        if (e instanceof RunnerError && e.status === 409) throw fail(409, 'ERR_NOT_READY', e.message);
+        lastErr = e;
+        sb.connector.invalidate(pod, SANDBOX_PORTS.runner);
+      }
     }
+    if (!status) throw fail(502, 'ERR_RUNNER', `ide ensure failed: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
     const tok = signJwt({ uid, sub: 'ide', tv: tvOf(uid) ?? 1 }, secret);
     reply.header('set-cookie', `${IDE_COOKIE}=${tok}; HttpOnly; Path=/; Max-Age=${IDE_COOKIE_TTL_SECONDS}; SameSite=Lax`);
     return status;
