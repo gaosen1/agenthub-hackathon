@@ -137,7 +137,6 @@ function HistoryView({ detail }: { detail: HandoffDetail }) {
 
 export function ChatPanel({ detail }: { detail: HandoffDetail }) {
   const isRunning = detail.status === 'running';
-  const isBot = detail.kind === 'bot';
   const [chatW, setChatW] = useState<number>(() => {
     const v = Number(localStorage.getItem('agenthub.chatW'));
     return Number.isFinite(v) && v >= CHAT_W_MIN ? clampW(v) : 380;
@@ -154,10 +153,10 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
     }
   }, [chatW]);
 
-  // running 且 status 变化时取 shell 入口；终态不请求（serve 已停，入口必 409）；
-  // bot 载体不请求（shell-url 仅 web 载体，对话面在钉钉群）
+  // running 且 status 变化时取 shell 入口；终态不请求（serve 已停，入口必 409）
+  // web/bot 双载体均可：bot 流程 serve 先起，task 走 ACP 流式，侧栏实时可见
   useEffect(() => {
-    if (!isRunning || isBot) return;
+    if (!isRunning) return;
     let alive = true;
     setShell(null);
     setErr('');
@@ -171,7 +170,7 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
     return () => {
       alive = false;
     };
-  }, [detail.id, detail.status, isRunning, isBot]);
+  }, [detail.id, detail.status, isRunning]);
 
   // port-forward 可能中途死掉（hub 重启/瞬断）：no-cors 探针拒绝即重取入口换 src
   useEffect(() => {
@@ -219,19 +218,14 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
       <div className="chat-h">
         <div className="t">
           <i className="fa-solid fa-comments" /> 云端会话
-          <span className="via">{isRunning ? (isBot ? 'DingTalk Bot 载体' : 'qwen-code Web Shell') : '历史回放（只读）'}</span>
+          <span className="via">{isRunning ? 'qwen-code Web Shell' : '历史回放（只读）'}</span>
         </div>
         <div className="sess">
           <i className="fa-regular fa-file-lines" /> {detail.sessionId}.jsonl
         </div>
       </div>
       {isRunning ? (
-        isBot ? (
-          <div className="shell-empty">
-            Bot 载体：task 先 headless 执行（期间机器人在群内静默），完成后钉钉流自动连接并重绑群会话，
-            届时在内部群 @机器人 即可基于云端工作区对话。Web Shell 目前仅支持 web 载体，执行进度见左侧执行日志。
-          </div>
-        ) : shell?.reachable ? (
+        shell?.reachable ? (
           <iframe className="shell-frame" src={shell.url} title="Qwen Code Web Shell" />
         ) : (
           <div className="shell-empty">
