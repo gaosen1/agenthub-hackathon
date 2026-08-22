@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, computeLockHash, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
 import { allLogs, appendLog, logsAfter, state } from './state.js';
 import { runTask, runTaskViaServe, startServe, stopServe, waitServeReady } from './qwen.js';
+import { startShellProxy } from './shell-proxy.js';
 import {
   buildDepsCache,
   buildOutput,
@@ -219,6 +220,8 @@ export function buildRunner(): FastifyInstance {
         await writeCloudModelConfig(qwenHome());
         await startServe({ mode: 'web', workspacePath: manifest.workspacePath, serveToken });
         await waitServeReady('web');
+        // 8082 头部改写代理：剥 serve 的 frame-ancestors 'none'，侧栏 iframe 可达
+        startShellProxy(8081, 8082);
         state.serveReady = true;
         appendLog('ok', 'qwen serve ready');
         if (body.task) {

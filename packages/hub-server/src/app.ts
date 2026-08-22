@@ -508,7 +508,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     if (h.status !== 'running') throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
     const sb = needSandbox();
     if (!h.pod_name) throw fail(409, 'ERR_NOT_READY', 'sandbox not provisioned');
-    const url = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, 8081).catch((e: unknown) => {
+    const url = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, 8082).catch((e: unknown) => {
       throw fail(502, 'ERR_RUNNER', `shell unreachable: ${e instanceof Error ? e.message : String(e)}`);
     });
     // 浏览器须直达：port-forward 的 127.0.0.1 仅 hub 与浏览器同机时成立；Pod IP 需 hub 部署在集群内
