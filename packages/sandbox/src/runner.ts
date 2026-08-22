@@ -14,6 +14,7 @@ import { allLogs, appendLog, logsAfter, state } from './state.js';
 import { runTask, runTaskViaServe, startServe, stopServe, waitServeReady } from './qwen.js';
 import { startShellProxy } from './shell-proxy.js';
 import { ensureIde, ideStatus } from './ide.js';
+import { notifyGroups } from './dingtalk.js';
 import {
   buildDepsCache,
   buildOutput,
@@ -32,6 +33,52 @@ import type { HandoffManifest } from '@agenthub/shared';
 /** qwen serve daemon 使用 SHA256(workspacePath) 前 16 位作为目录名 */
 function daemonWsHash(workspacePath: string): string {
   return createHash('sha256').update(resolve(workspacePath)).digest('hex').slice(0, 16);
+}
+
+/**
+ * task 终态群推总结：状态 + task + 新增 commit 数 + agent 最后一条回复摘取。
+ * 摘要来源 session jsonl 的最后一条 assistant 记录（headless/serve 两路径通用）。
+ */
+async function notifyTaskSummary(
+  manifest: HandoffManifest,
+  task: string,
+  exitCode: number,
+  chats: Array<{ chatId: string }>,
+): Promise<void> {
+  const ok = exitCode === 0;
+  const base = manifest.repo.baseCommit;
+  let commits = '';
+  try {
+    const { stdout } = await exec('git', ['-C', manifest.workspacePath, 'rev-list', '--count', `${base}..HEAD`]);
+    commits = stdout.trim();
+  } catch {
+    /* 无 git 信息则省略 */
+  }
+  let summary = '';
+  try {
+    const jsonl = join(qwenHome(), 'projects', manifest.wsHash, 'chats', `${manifest.sessionId}.jsonl`);
+    const lines = (await fs.readFile(jsonl, 'utf8')).split('\n').filter(Boolean);
+    for (let i = lines.length - 1; i >= 0 && !summary; i--) {
+      try {
+        const e = JSON.parse(lines[i]!) as { type?: string; message?: { parts?: Array<{ text?: string }> } };
+        if (e.type === 'assistant') summary = (e.message?.parts?.map((p) => p.text ?? '').join('') ?? '').slice(0, 400);
+      } catch {
+        /* 坏行跳过 */
+      }
+    }
+  } catch {
+    /* 无 session 文件则省略摘要 */
+  }
+  const title = ok ? '✅ 云端任务完成' : '❌ 云端任务失败';
+  const text = [
+    title,
+    '',
+    `**task**: ${task.slice(0, 200)}`,
+    `**handoff**: ${manifest.handoffId}`,
+    ...(commits ? [`**commits**: 新增 ${commits} 个（base ${base.slice(0, 7)}）`] : []),
+    ...(summary ? ['', `**摘要**: ${summary}`] : []),
+  ].join('\n');
+  await notifyGroups(chats, title, text);
 }
 
 /**
@@ -219,6 +266,12 @@ export function buildRunner(): FastifyInstance {
             state.taskDone = true;
             if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
             appendLog(code === 0 ? 'ok' : 'err', `task relay finished (exit ${code})`);
+            // 终态主动推群总结（钉钉 OpenAPI；未配置凭证/无绑定群时静默 no-op）
+            const notifyChats = [...existingChats];
+            if (body.bindChatId && !notifyChats.some((c) => c.chatId === body.bindChatId)) {
+              notifyChats.push({ chatId: body.bindChatId });
+            }
+            void notifyTaskSummary(manifest, body.task, code, notifyChats);
           }
           // 启动自动绑定监听器：新群 @机器人 时自动 fork session 并写路由
           startAutoBinder(manifest.sessionId, manifest.workspacePath, botName);
