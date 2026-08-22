@@ -18,7 +18,8 @@ deploy/
 沙箱镜像不内置 code-server；它预置在 NAS 上，沙箱 Pod 只读挂载 `/mnt/shared`，
 用户在任务页点「打开 IDE」时由 runner 按需拉起（秒级）。启用步骤：
 
-1. 创建 NAS 文件系统与挂载点（与 ACK/ACS 同 VPC，通用型按量即可）；
+1. NAS：本环境已有现成文件系统 `011ycys4ld1m2mdhupu`（与 ACK/ACS 同 VPC，挂载点 `-ken57`），直接复用即可；
+   若是全新环境才需要先在 NAS 控制台创建文件系统与挂载点（同 VPC，通用型按量）；
 2. 播种：替换 `k8s/30-nas-seed-job.yaml` 里的 `REPLACE_NAS_SERVER` / `REPLACE_NAS_PATH`
    后 `kubectl apply -f k8s/30-nas-seed-job.yaml`，等 Job 完成（`kubectl -n agenthub logs job/agenthub-nas-seed`）；
 3. 配置 hub：`k8s/20-hub.yaml` 打开 `SANDBOX_NAS_SERVER` / `SANDBOX_NAS_PATH` 两项 env
