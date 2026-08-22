@@ -188,13 +188,6 @@ export function buildRunner(): FastifyInstance {
           const botName = process.env.BOT_NAME ?? 'bot';
           const { writeChannelsConfig } = await import('./context.js');
           await writeChannelsConfig(qwenHome(), botName, manifest.workspacePath);
-          // task 与载体正交（spec §1）：bot 带 task 也先 headless 续跑，完成后再起 serve 供群内对话
-          if (body.task) {
-            const code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
-            state.taskDone = true;
-            if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
-            appendLog(code === 0 ? 'ok' : 'err', `task relay finished (exit ${code})`);
-          }
           // 在 serve 启动前重绑所有现有群路由，daemon 启动时 lazy-reload routes.json 即生效
           const dHash = daemonWsHash(manifest.workspacePath);
           const existingChats = await listChats(qwenHome(), dHash);
@@ -207,10 +200,26 @@ export function buildRunner(): FastifyInstance {
             await rewriteRoute(qwenHome(), dHash, botName, body.bindChatId, manifest.sessionId, manifest.workspacePath);
             appendLog('ok', `explicit bind chat ${body.bindChatId} -> session ${manifest.sessionId.slice(0, 8)}`);
           }
+          // serve 先起：钉钉流与 Web Shell 立即可用；task 走 serve ACP 流式执行，外部端可实时观看
           await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName });
           await waitServeReady('bot');
+          // 8082 头部改写代理：剥 serve 的 frame-ancestors 'none'，侧栏 iframe 可达（同 web 载体）
+          startShellProxy(Number(process.env.AGENTHUB_SERVE_PORT ?? 8081), 8082);
           state.serveReady = true;
           appendLog('ok', 'bot serve ready (dingtalk stream connected on qwen side)');
+          // task 经 serve ACP 流式执行（侧栏 Web Shell 实时可见）；serve 路径不可用时回退 headless 续跑
+          if (body.task) {
+            let code: number;
+            try {
+              code = await runTaskViaServe(manifest.workspacePath, manifest.sessionId, body.task);
+            } catch (e) {
+              appendLog('sys', `serve task path unavailable (${e instanceof Error ? e.message : String(e)}); fallback headless`);
+              code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
+            }
+            state.taskDone = true;
+            if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
+            appendLog(code === 0 ? 'ok' : 'err', `task relay finished (exit ${code})`);
+          }
           // 启动自动绑定监听器：新群 @机器人 时自动 fork session 并写路由
           startAutoBinder(manifest.sessionId, manifest.workspacePath, botName);
           return;
