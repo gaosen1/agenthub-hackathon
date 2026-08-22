@@ -192,8 +192,8 @@ export class Worker {
             RUNNER_TOKEN: runnerToken,
             QWEN_SERVER_TOKEN: serveToken,
             HANDOFF_ID: h.id,
-            // serve --allow-origin / web-shell frame-ancestors：与浏览器访问 hub 的源一致
-            AGENTHUB_WEB_ORIGIN: process.env.HUB_WEB_URL ?? 'http://localhost:4180',
+            // 不注入 AGENTHUB_WEB_ORIGIN：iframe 文档源随后端变化（Aone 每沙箱子域 / port-forward），
+            // 无法枚举；runner 侧 serve --allow-origin 默认 '*'（配 QWEN_SERVER_TOKEN，qwen serve 强制要求）
           },
           secretRefs: modelRefs,
           labels: { 'agenthub/kind': 'web', 'agenthub/owner': String(h.user_id), 'agenthub/handoff': h.id },
