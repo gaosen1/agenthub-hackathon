@@ -504,9 +504,9 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
 
   // ── Web Shell 入口（qwen-code 原生流式界面）：serve 默认在根路径托管 web-shell，loopback 免认证 ──
+  // web/bot 双载体均可：bot 流程 serve 先起（task 走 ACP 流式），侧栏同样可嵌
   app.get('/api/handoffs/:id/shell-url', async (req) => {
     const h = ownHandoff(req);
-    if (h.kind !== 'web') throw fail(409, 'ERR_NOT_READY', 'web shell only for kind=web');
     if (h.status !== 'running') throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
     const sb = needSandbox();
     if (!h.pod_name) throw fail(409, 'ERR_NOT_READY', 'sandbox not provisioned');
