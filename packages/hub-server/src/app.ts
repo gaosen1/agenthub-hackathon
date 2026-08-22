@@ -516,6 +516,28 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name! }, SANDBOX_PORTS.ide);
   };
 
+  /**
+   * IDE 隧道健康探测 + 重建（同 shell-url 的瞬断修复模式）：
+   * 本地 port-forward 通道被间歇性网络故障污染后会持续不可用，
+   * 探测失败即 dispose 废弃旧通道重建，最多 3 轮。
+   */
+  const ensureIdeTunnel = async (h: HandoffRow): Promise<string> => {
+    const sb = needSandbox();
+    const podRef = { namespace: sb.namespace, podName: h.pod_name! };
+    let base = await sb.connector.getBaseUrl(podRef, SANDBOX_PORTS.ide);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(6000) });
+        if (res.ok) return base;
+      } catch {
+        // 通道不可用：废弃重建后重试
+      }
+      await sb.connector.dispose(podRef).catch(() => undefined);
+      base = await sb.connector.getBaseUrl(podRef, SANDBOX_PORTS.ide);
+    }
+    return base;
+  };
+
   const tvOf = (uid: number): number | undefined =>
     (db.prepare('SELECT token_version FROM users WHERE id=?').get(uid) as { token_version: number } | undefined)?.token_version;
 
@@ -549,7 +571,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const prefix = `/api/handoffs/${row.id}/ide`;
     const upstreamPath = req.url.startsWith(prefix) ? req.url.slice(prefix.length) || '/' : req.url;
     reply.hijack();
-    pipeHttp(req.raw, reply.raw, await ideUpstreamBase(row), upstreamPath, prefix);
+    pipeHttp(req.raw, reply.raw, await ensureIdeTunnel(row), upstreamPath, prefix);
   };
 
   app.route({ method: ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'PATCH'], url: '/api/handoffs/:id/ide', handler: ideProxyHandler });
@@ -567,7 +589,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         if (uid === null) throw new Error('unauthorized');
         const row = db.prepare('SELECT * FROM handoffs WHERE id=?').get(id) as HandoffRow | undefined;
         if (!row || row.user_id !== uid || row.kind !== 'web' || row.status !== 'running' || !row.pod_name) throw new Error('not ready');
-        pipeUpgrade(req.headers, socket, head, await ideUpstreamBase(row), m[2] || '/');
+        pipeUpgrade(req.headers, socket, head, await ensureIdeTunnel(row), m[2] || '/');
       } catch {
         socket.destroy();
       }
