@@ -555,7 +555,11 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       ok = await fetch(`${url}/`, { signal: AbortSignal.timeout(3000) })
         .then((r) => r.ok)
         .catch(() => false);
-      if (!ok) sb.connector.invalidate(pod, 8082);
+      if (!ok) {
+        sb.connector.invalidate(pod, 8082);
+        // 探针间隔让位沙箱冷启动（serve 起进程需数秒），避免首判 false 后前端空等
+        await new Promise((r) => setTimeout(r, 1200));
+      }
     }
     // 浏览器能否直达由后端决定：port-forward 仅同机；Aone 网关办公网可达
     return { url, reachable: ok && sb.connector.browserReachable(url) };
