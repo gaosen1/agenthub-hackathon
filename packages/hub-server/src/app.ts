@@ -562,9 +562,11 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       }
     }
     // 浏览器能否直达由后端决定：port-forward 仅同机；Aone 网关办公网可达
-    // 拼 session 路由（web-shell 按 pathname /session/<id> 解析）：iframe 加载即挂当前任务会话流，而非欢迎页
+    // 拼 session 路由（web-shell 按 pathname /session/<id> 解析）：iframe 加载即挂当前任务会话流，而非欢迎页；
+    // #token= 是 web-shell 读取凭证的标准方式（fragment 不出浏览器），否则会话 API 401 落回欢迎页
     const sess = h.session_id ? `/session/${encodeURIComponent(h.session_id)}` : '';
-    return { url: `${url}${sess}`, reachable: ok && sb.connector.browserReachable(url) };
+    const tok = h.serve_token ? `#token=${encodeURIComponent(h.serve_token)}` : '';
+    return { url: `${url}${sess}${tok}`, reachable: ok && sb.connector.browserReachable(url) };
   });
 
   // ── Web IDE（code-server）透明反代：ensure 下发 HttpOnly Cookie，后续请求 Cookie/Bearer 双鉴权 ──
