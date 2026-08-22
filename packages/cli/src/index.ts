@@ -170,4 +170,49 @@ program
     }
   });
 
+program
+  .command('model')
+  .description('模型 provider 配置（云端沙箱推理）：show / set / test——provider 频繁切换场景')
+  .argument('<action>', 'show / set / test')
+  .option('--base-url <url>', 'OpenAI 兼容 base url')
+  .option('--model <name>', '模型名')
+  .option('--key <apiKey>', 'API key；缺省保留已存密钥')
+  .action(async (action: string, opts: { baseUrl?: string; model?: string; key?: string }) => {
+    try {
+      const client = new HubClient(loadConfig());
+      if (action === 'show') {
+        console.log(JSON.stringify(await client.getModelConfig(), null, 2));
+        return;
+      }
+      if (action === 'set') {
+        if (!opts.baseUrl || !opts.model) {
+          throw new Error('用法: agenthub model set --base-url <url> --model <name> [--key <apiKey>]');
+        }
+        await client.setModelConfig({
+          baseUrl: opts.baseUrl,
+          model: opts.model,
+          ...(opts.key ? { apiKey: opts.key } : {}),
+        });
+        console.log(`✓ 已切换: ${opts.model} @ ${opts.baseUrl}`);
+        return;
+      }
+      if (action === 'test') {
+        const r = await client.testModelConfig({
+          ...(opts.baseUrl ? { baseUrl: opts.baseUrl } : {}),
+          ...(opts.model ? { model: opts.model } : {}),
+          ...(opts.key ? { apiKey: opts.key } : {}),
+        });
+        if (r.ok) console.log(`✓ 连通（${r.latencyMs}ms）`);
+        else {
+          console.error(`✗ ${r.error ?? 'unknown error'}`);
+          process.exit(1);
+        }
+        return;
+      }
+      throw new Error(`未知动作: ${action}（支持 show/set/test）`);
+    } catch (e) {
+      fail(e);
+    }
+  });
+
 program.parse();

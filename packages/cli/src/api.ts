@@ -7,6 +7,7 @@ import {
   CreateHandoffRespSchema,
   HandoffDetailSchema,
   ListHandoffsRespSchema,
+  ModelTestRespSchema,
   PullIntentRespSchema,
 } from '@agenthub/shared';
 import type {
@@ -16,6 +17,7 @@ import type {
   CreateHandoffResp,
   HandoffDetail,
   ListHandoffsResp,
+  ModelTestResp,
   PullIntentResp,
 } from '@agenthub/shared';
 import type { CliConfig } from './config.js';
@@ -110,6 +112,20 @@ export class HubClient {
 
   listBots(): Promise<{ items: Bot[] }> {
     return this.request('GET', '/api/bots');
+  }
+
+  // ---------- 模型 provider（云端沙箱推理）----------
+  getModelConfig(): Promise<{ hasKey: boolean; baseUrl?: string; model?: string }> {
+    return this.request('GET', '/api/account/model');
+  }
+
+  /** apiKey 缺省保留已存密钥——快速切换只传 baseUrl/model */
+  setModelConfig(cfg: { baseUrl: string; model: string; apiKey?: string }): Promise<{ ok: boolean }> {
+    return this.request('PUT', '/api/account/model', cfg);
+  }
+
+  testModelConfig(cfg?: { baseUrl?: string; model?: string; apiKey?: string }): Promise<ModelTestResp> {
+    return this.request('POST', '/api/account/model/test', cfg ?? {}, (d) => ModelTestRespSchema.parse(d));
   }
 }
 
