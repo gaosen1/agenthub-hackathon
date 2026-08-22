@@ -170,6 +170,10 @@ export class AoneOrchestrator implements PodOrchestrator {
 export class AoneConnector implements SandboxConnector {
   constructor(private orch: AoneOrchestrator) {}
 
+  browserReachable(): boolean {
+    return true; // 网关 https/wss 入口，办公网浏览器直达
+  }
+
   async getBaseUrl(pod: PodRef, port: number): Promise<string> {
     const sb = await this.orch.handle(pod.podName);
     return await sb.getEndpointUrl(port);
