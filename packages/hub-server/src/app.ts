@@ -523,8 +523,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         .catch(() => false);
       if (!ok) sb.connector.invalidate(pod, 8082);
     }
-    // 浏览器须直达：port-forward 的 127.0.0.1 仅 hub 与浏览器同机时成立；Pod IP 需 hub 部署在集群内
-    return { url, reachable: ok && url.startsWith('http://127.0.0.1') };
+    // 浏览器能否直达由后端决定：port-forward 仅同机；Aone 网关办公网可达
+    return { url, reachable: ok && sb.connector.browserReachable(url) };
   });
 
   // ── Web IDE（code-server）透明反代：ensure 下发 HttpOnly Cookie，后续请求 Cookie/Bearer 双鉴权 ──

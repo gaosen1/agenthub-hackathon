@@ -16,10 +16,16 @@ export interface SandboxConnector {
   /** 废弃指定端口缓存通道（探针失败后重建）；Direct 为 no-op */
   invalidate(pod: PodRef, port: number): void;
   dispose(pod: PodRef): Promise<void>;
+  /** 浏览器能否直达该 URL（port-forward 仅同机；Pod IP 不可；Aone 网关可） */
+  browserReachable(url: string): boolean;
 }
 
 export class DirectConnector implements SandboxConnector {
   constructor(private readonly core: k8s.CoreV1Api) {}
+
+  browserReachable(): boolean {
+    return false; // Pod 私有 IP，浏览器不可达
+  }
 
   async getBaseUrl(pod: PodRef, port: number): Promise<string> {
     const res = await this.core.readNamespacedPod({ name: pod.podName, namespace: pod.namespace });
@@ -46,6 +52,10 @@ export class PortForwardConnector implements SandboxConnector {
   private readonly forwards = new Map<string, ForwardEntry>();
 
   constructor(private readonly pf: k8s.PortForward) {}
+
+  browserReachable(url: string): boolean {
+    return url.startsWith('http://127.0.0.1'); // 仅 hub 与浏览器同机时成立
+  }
 
   private keyOf(pod: PodRef, port: number): string {
     return `${pod.namespace}/${pod.podName}:${port}`;
