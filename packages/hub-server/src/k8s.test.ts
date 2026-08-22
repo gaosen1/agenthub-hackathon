@@ -71,6 +71,17 @@ describe('K8sOrchestrator Pod spec', () => {
     expect(captured.pods[0]!.spec?.volumes).toBeUndefined();
   });
 
+  it('配置 ConfigMap 时 createPod 也带叠加层（web Pod 免重建镜像更新 runner）', async () => {
+    const cfg: K8sConfig = { ...nasCfg, configMapName: 'runner-cm-data' };
+    const { orch, captured } = makeFake(cfg);
+    await orch.createPod(spec);
+    const pod = captured.pods[0]!;
+    expect(pod.spec?.volumes?.map((v) => v.name)).toEqual(['nas-shared', 'runner-cm']);
+    const container = pod.spec?.containers?.[0]!;
+    expect(container.command).toEqual(['sh', '-c']);
+    expect(container.args?.[0]).toContain('ide.js');
+  });
+
   it('createDeployment 同时保留 ConfigMap 叠加层与 NAS 挂载', async () => {
     const cfg: K8sConfig = { ...nasCfg, configMapName: 'runner-cm' };
     const { orch, captured } = makeFake(cfg);
