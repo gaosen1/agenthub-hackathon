@@ -19,7 +19,18 @@ export function serveArgs(spec: ServeSpec): string[] {
   if (spec.mode === 'bot') {
     return ['serve', '--workspace', spec.workspacePath, '--channel', spec.botName ?? ''];
   }
-  return ['serve', '--hostname', '0.0.0.0', '--port', '8081', '--workspace', spec.workspacePath];
+  // --allow-origin 同时充作 web-shell 的 frame-ancestors：允许 hub 源 iframe 嵌入原生 Shell
+  return [
+    'serve',
+    '--hostname',
+    '0.0.0.0',
+    '--port',
+    '8081',
+    '--workspace',
+    spec.workspacePath,
+    '--allow-origin',
+    process.env.AGENTHUB_WEB_ORIGIN ?? 'http://localhost:4180',
+  ];
 }
 
 export async function startServe(spec: ServeSpec): Promise<void> {

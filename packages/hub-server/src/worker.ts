@@ -192,6 +192,8 @@ export class Worker {
             RUNNER_TOKEN: runnerToken,
             QWEN_SERVER_TOKEN: serveToken,
             HANDOFF_ID: h.id,
+            // serve --allow-origin / web-shell frame-ancestors：与浏览器访问 hub 的源一致
+            AGENTHUB_WEB_ORIGIN: process.env.HUB_WEB_URL ?? 'http://localhost:4180',
           },
           secretRefs: modelRefs,
           labels: { 'agenthub/kind': 'web', 'agenthub/owner': String(h.user_id), 'agenthub/handoff': h.id },
