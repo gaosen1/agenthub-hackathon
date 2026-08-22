@@ -725,7 +725,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
             qwenVersion: SANDBOX_TEMPLATE.qwenVersion,
             toolchain: [...SANDBOX_TEMPLATE.toolchain],
             resources: { ...SANDBOX_RESOURCES },
-            ports: { ...SANDBOX_PORTS },
+            ports: { runner: SANDBOX_PORTS.runner, serve: SANDBOX_PORTS.serve, ide: SANDBOX_PORTS.ide },
             acs: sandbox!.acs ?? true,
           }
         : null,

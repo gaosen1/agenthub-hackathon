@@ -1,6 +1,6 @@
 /**
  * Web IDE（code-server）按需拉起：二进制预置在 NAS 共享只读层 /mnt/shared，
- * 首次 ensure 时 spawn 监听 :8082，Pod 生命周期内幂等复用。
+ * 首次 ensure 时 spawn 监听 :8083（8082 被 shell-proxy 占用），Pod 生命周期内幂等复用。
  */
 import { existsSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import type { RunnerIdeStatusResp } from '@agenthub/shared';
 import { appendLog, state } from './state.js';
 
-export const IDE_PORT = Number(process.env.IDE_PORT ?? 8082);
+export const IDE_PORT = Number(process.env.IDE_PORT ?? 8083);
 
 /** NAS 挂载点（与 hub-server k8s.NAS_MOUNT_PATH 对齐，本地联调可覆盖） */
 export const sharedDir = (): string => process.env.SHARED_DIR ?? '/mnt/shared';

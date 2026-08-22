@@ -1,5 +1,5 @@
 /**
- * Web IDE（code-server）透明反代管道（/api/handoffs/:id/ide/* → sandbox Pod :8082）
+ * Web IDE（code-server）透明反代管道（/api/handoffs/:id/ide/* → sandbox Pod :8083）
  * - 鉴权：Bearer JWT 或 ensure 时下发的 HttpOnly Cookie ah_ide（iframe 无法附加 Authorization 头）
  * - 支持 WebSocket upgrade（code-server 终端/重连）
  * - 上游根绝对 3xx Location 重写为带前缀路径（code-server 无 base-path 能力的兜底）

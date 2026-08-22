@@ -350,7 +350,7 @@ export function buildRunner(): FastifyInstance {
     return reply.send(logsAfter(after));
   });
 
-  // Web IDE：按需从 NAS 共享层拉起 code-server（:8082）打开当前工作区，幂等
+  // Web IDE：按需从 NAS 共享层拉起 code-server（:8083）打开当前工作区，幂等
   app.post('/ide/ensure', async (_req, reply) => {
     const ws = manifest?.workspacePath ?? botWorkspace?.workspacePath;
     if (!ws) return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'no workspace loaded' } });

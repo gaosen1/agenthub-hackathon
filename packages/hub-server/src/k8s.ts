@@ -66,9 +66,9 @@ export const SANDBOX_LABEL = 'app=agenthub-sandbox';
 export const DEFAULT_SANDBOX_IMAGE = '<YOUR_ACR_REGISTRY>/agenthub-demo/sandbox:dev';
 export const sandboxImage = () => process.env.SANDBOX_IMAGE ?? DEFAULT_SANDBOX_IMAGE;
 
-/** Pod 资源规格：createPod/createDeployment 与面板模板（S9）共用，不漂移 */
+/** Pod 资源规格：createPod/createDeployment 与面板模板（S9）共用，不漂移；8082 被 shell-proxy 占用 */
 export const SANDBOX_RESOURCES = { cpu: '2', memory: '4Gi' };
-export const SANDBOX_PORTS = { runner: 8080, serve: 8081, ide: 8082 };
+export const SANDBOX_PORTS = { runner: 8080, serve: 8081, shellProxy: 8082, ide: 8083 };
 
 /** NAS 在沙箱内的挂载点（runner 由此找 tools/code-server） */
 export const NAS_MOUNT_PATH = '/mnt/shared';
