@@ -36,7 +36,46 @@ beforeAll(async () => {
 const args = process.argv.slice(2);
 if (args[0] === 'serve') {
   const http = await import('node:http');
-  http.createServer((_q, s) => s.end('ok')).listen(8081);
+  const { execFileSync } = await import('node:child_process');
+  const fs = await import('node:fs');
+  const dbg = (s) => { try { if (process.env.QWEN_STUB_LOG) fs.appendFileSync(process.env.QWEN_STUB_LOG, s + '\\n'); } catch (e) {} };
+  dbg('boot ' + args.join(' '));
+  let sseRes = null;
+  const send = (u) => { if (sseRes) sseRes.write('data: ' + JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { update: u } }) + '\\n\\n'); };
+  http.createServer((q, s) => {
+    dbg(q.method + ' ' + q.url);
+    if (q.url === '/acp' && q.method === 'GET') {
+      if (process.env.QWEN_STUB_NO_ACP) { s.writeHead(404).end(); return; }
+      s.writeHead(200, { 'content-type': 'text/event-stream' });
+      sseRes = s;
+      return;
+    }
+    if (q.url === '/acp' && q.method === 'POST') {
+      let b = '';
+      q.on('data', (c) => (b += c));
+      q.on('end', () => {
+        if (process.env.QWEN_STUB_NO_ACP) { s.writeHead(404).end(); return; }
+        const m = JSON.parse(b);
+        dbg('parsed ' + m.method);
+        const reply = (result) => { dbg('reply ' + m.method); s.writeHead(200, { 'content-type': 'application/json', 'acp-connection-id': 'stub-conn' }); s.end(JSON.stringify({ jsonrpc: '2.0', id: m.id, result })); };
+        if (m.method === 'initialize') reply({ protocolVersion: 1 });
+        else if (m.method === 'session/load') reply({ modes: { currentModeId: 'auto', availableModes: [{ id: 'auto' }, { id: 'yolo' }] } });
+        else if (m.method === 'session/set_mode') reply({});
+        else if (m.method === 'session/prompt') {
+          try { execFileSync('git', ['-c','user.name=cloud','-c','user.email=c@c','commit','--allow-empty','-m','cloud-work'], { cwd: process.cwd() }); } catch (e) {}
+          // 真 serve 协议：prompt 先 202，流式帧与最终应答帧都走 SSE
+          s.writeHead(202); s.end();
+          setTimeout(() => {
+            send({ sessionUpdate: 'agent_message_chunk', content: { text: 'cloud line one\\n' } });
+            send({ sessionUpdate: 'agent_message_chunk', content: { text: 'cloud line two\\n' } });
+            if (sseRes) sseRes.write('data: ' + JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } }) + '\\n\\n');
+          }, 60);
+        } else reply({});
+      });
+      return;
+    }
+    s.end('ok');
+  }).listen(8081);
 } else if (args.includes('--resume')) {
   const { execFileSync } = await import('node:child_process');
   execFileSync('git', ['-c','user.name=cloud','-c','user.email=c@c','commit','--allow-empty','-m','cloud-work'], { cwd: process.cwd() });
@@ -160,7 +199,8 @@ describe('runner /load → /snapshot 端到端（stub qwen）', () => {
     while (Date.now() < deadline) {
       const res = await app.inject({ method: 'GET', url: '/healthz' });
       health = res.json() as typeof health;
-      if (health.serveReady || health.lastError) break;
+      // serve 先起、任务后经 ACP 跑：须等 taskDone（serveReady 不再意味任务完成）
+      if ((health.serveReady && health.taskDone) || health.lastError) break;
       await new Promise((r) => setTimeout(r, 300));
     }
     expect(health.lastError).toBeUndefined();
@@ -222,6 +262,9 @@ describe('runner /load → /snapshot 端到端（stub qwen）', () => {
     await fs.access(outChat);
     const events = await fs.readFile(join(outDir, 'logs', 'events.jsonl'), 'utf8');
     expect(events).toContain('task relay finished');
+    // serve 路径回归：任务经 ACP 流式执行，relay 日志含流式行（盲点修复）
+    expect(events).toContain('task relay via serve');
+    expect(events).toContain('cloud line one');
 
     // result.bundle 可被本地 git 消费（pull 侧闭环的前半段）：verify 退出码 0  即有效
     expect(() => git(manifest.workspacePath, 'bundle', 'verify', join(outDir, 'result.bundle'))).not.toThrow();
@@ -236,11 +279,12 @@ describe('runner /load → /snapshot 端到端（stub qwen）', () => {
     });
     expect(load2.statusCode).toBe(202);
     const deadline2 = Date.now() + 30_000;
-    let health2: { serveReady: boolean; lastError?: string } = { serveReady: false };
+    let health2: { serveReady: boolean; taskDone: boolean; lastError?: string } = { serveReady: false, taskDone: false };
     while (Date.now() < deadline2) {
       const res = await app.inject({ method: 'GET', url: '/healthz' });
       health2 = res.json() as typeof health2;
-      if (health2.serveReady || health2.lastError) break;
+      // 同主用例：serve 先起，须等 taskDone 再放行，避免任务 stub 与下一用例并发 commit
+      if ((health2.serveReady && health2.taskDone) || health2.lastError) break;
       await new Promise((r) => setTimeout(r, 300));
     }
     expect(health2.lastError).toBeUndefined();
@@ -311,5 +355,27 @@ describe('runner /load → /snapshot 端到端（stub qwen）', () => {
     expect(log).toContain('local new');
     expect(git(ws, 'rev-parse', 'HEAD')).toBe(localHead);
     await app.close();
+  }, 60_000);
+});
+
+describe('task relay 回退（serve ACP 不可用）', () => {
+  it('runTaskViaServe 拒绝 + headless runTask 接管产出 commit', async () => {
+    process.env.QWEN_STUB_NO_ACP = '1';
+    try {
+      const { startServe, stopServe, waitServeReady, runTaskViaServe, runTask } = await import('./qwen.js');
+      const ws = join(root, 'proj-fallback');
+      await fs.mkdir(ws, { recursive: true });
+      git(ws, 'init', '-b', 'main');
+      git(ws, 'commit', '--allow-empty', '-m', 'base');
+      await startServe({ mode: 'web', workspacePath: ws, serveToken: 't' });
+      await waitServeReady('web');
+      await expect(runTaskViaServe(ws, 'sess-fb', 'do it')).rejects.toThrow();
+      const code = await runTask(ws, 'sess-fb', 'do it');
+      expect(code).toBe(0);
+      expect(git(ws, 'log', '--oneline')).toContain('cloud-work');
+      await stopServe();
+    } finally {
+      delete process.env.QWEN_STUB_NO_ACP;
+    }
   }, 60_000);
 });

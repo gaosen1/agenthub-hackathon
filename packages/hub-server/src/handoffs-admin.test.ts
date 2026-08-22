@@ -78,3 +78,28 @@ describe('列表面板归档/删除', () => {
     expect(db.prepare('SELECT count(*) c FROM handoff_events WHERE handoff_id=?').get('hf-a3')).toEqual({ c: 0 });
   });
 });
+
+describe('Web Shell 入口', () => {
+  it('running web 返回可达 127.0.0.1 地址；非 running → 409', async () => {
+    await app.close();
+    const connector = {
+      getBaseUrl: async () => 'http://127.0.0.1:45001',
+      dispose: async () => undefined,
+    };
+    app = buildApp({
+      db,
+      signer: fakeSigner,
+      secret: 's',
+      sandbox: { connector, orchestrator: {} as never, namespace: 'agenthub' },
+    });
+    insertHandoff('hf-sh1', 'running');
+    db.prepare('UPDATE handoffs SET pod_name=? WHERE id=?').run('ah-web-sh1', 'hf-sh1');
+    const ok = await app.inject({ method: 'GET', url: '/api/handoffs/hf-sh1/shell-url', headers: auth() });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ url: 'http://127.0.0.1:45001', reachable: true });
+
+    insertHandoff('hf-sh2', 'done');
+    const bad = await app.inject({ method: 'GET', url: '/api/handoffs/hf-sh2/shell-url', headers: auth() });
+    expect(bad.statusCode).toBe(409);
+  });
+});

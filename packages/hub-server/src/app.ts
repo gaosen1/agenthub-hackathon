@@ -502,7 +502,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     },
   });
 
-  // ── Web IDE（code-server）代理：/api/handoffs/:id/ide/* → Pod :8082 ──
+  // ── Web IDE（code-server）代理：/api/handoffs/:id/ide/* → Pod :8083 ──
   const ideGate = (req: FastifyRequest): HandoffRow => {
     const h = ownHandoff(req);
     if (h.kind !== 'web') throw fail(409, 'ERR_NOT_READY', 'IDE only for kind=web');
@@ -587,6 +587,20 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       | undefined;
     if (!row || row.user_id !== payload.uid || row.status !== 'running' || row.kind !== 'web') return;
     return reply.redirect(`/api/handoffs/${payload.hid}/ide${req.url}`);
+  });
+
+  // ── Web Shell 入口（qwen-code 原生流式界面）：serve 默认在根路径托管 web-shell，loopback 免认证 ──
+  app.get('/api/handoffs/:id/shell-url', async (req) => {
+    const h = ownHandoff(req);
+    if (h.kind !== 'web') throw fail(409, 'ERR_NOT_READY', 'web shell only for kind=web');
+    if (h.status !== 'running') throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
+    const sb = needSandbox();
+    if (!h.pod_name) throw fail(409, 'ERR_NOT_READY', 'sandbox not provisioned');
+    const url = await sb.connector.getBaseUrl({ namespace: sb.namespace, podName: h.pod_name }, SANDBOX_PORTS.shellProxy).catch((e: unknown) => {
+      throw fail(502, 'ERR_RUNNER', `shell unreachable: ${e instanceof Error ? e.message : String(e)}`);
+    });
+    // 浏览器须直达：port-forward 的 127.0.0.1 仅 hub 与浏览器同机时成立；Pod IP 需 hub 部署在集群内
+    return { url, reachable: url.startsWith('http://127.0.0.1') };
   });
 
   // ── Bots（spec §4.2）──────────────────────────────────

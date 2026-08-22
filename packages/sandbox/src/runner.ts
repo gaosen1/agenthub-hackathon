@@ -12,7 +12,8 @@ import { promisify } from 'node:util';
 import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, computeLockHash, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
 import { allLogs, appendLog, logsAfter, state } from './state.js';
 import { codeServerInstalled, ensureIde, ideStatus } from './ide.js';
-import { runTask, startServe, stopServe, waitServeReady } from './qwen.js';
+import { runTask, runTaskViaServe, startServe, stopServe, waitServeReady } from './qwen.js';
+import { startShellProxy } from './shell-proxy.js';
 import {
   buildDepsCache,
   buildOutput,
@@ -214,19 +215,28 @@ export function buildRunner(): FastifyInstance {
           return;
         }
 
-        // web 模式：先执行任务接力（如有），完成后拉起 serve 供继续对话
+        // web 模式：serve 先起（侧栏/web-shell 立即可连），任务经 serve ACP 流式执行（盲点修复）；
+        // serve 路径不可用时回退 headless 续跑
         // 覆盖还原的本地模型配置（可能指向办公网端点，Pod 不可达）
         await writeCloudModelConfig(qwenHome());
+        await startServe({ mode: 'web', workspacePath: manifest.workspacePath, serveToken });
+        await waitServeReady('web');
+        // 8082 头部改写代理：剥 serve 的 frame-ancestors 'none'，侧栏 iframe 可达
+        startShellProxy(8081, 8082);
+        state.serveReady = true;
+        appendLog('ok', 'qwen serve ready');
         if (body.task) {
-          const code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
+          let code: number;
+          try {
+            code = await runTaskViaServe(manifest.workspacePath, manifest.sessionId, body.task, serveToken);
+          } catch (e) {
+            appendLog('sys', `serve task path unavailable (${e instanceof Error ? e.message : String(e)}); fallback headless`);
+            code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
+          }
           state.taskDone = true;
           if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
           appendLog(code === 0 ? 'ok' : 'err', `task relay finished (exit ${code})`);
         }
-        await startServe({ mode: 'web', workspacePath: manifest.workspacePath, serveToken });
-        await waitServeReady('web');
-        state.serveReady = true;
-        appendLog('ok', 'qwen serve ready');
       } catch (e) {
         state.lastError = e instanceof Error ? e.message : String(e);
         appendLog('err', `load failed: ${state.lastError}`);
