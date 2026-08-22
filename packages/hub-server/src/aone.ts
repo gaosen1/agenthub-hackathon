@@ -115,6 +115,9 @@ export class AoneOrchestrator implements PodOrchestrator {
   }
 
   async getPodPhase(name: string): Promise<PodPhase> {
+    // 本 hub 未登记（重启前的旧实例/他 hub 所建）直接 gone：
+    // sdk.connect 对不存在实例会空等 readiness 超时，recover 逐条调用会阻塞 worker 启动数分钟
+    if (!this.handles.has(name) && !this.labels.has(name)) return 'gone';
     const sb = await this.handle(name).catch(() => undefined);
     if (!sb) return 'gone';
     const info = await sb.getInfo().catch(() => undefined);
