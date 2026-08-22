@@ -80,10 +80,16 @@ describe('列表面板归档/删除', () => {
 });
 
 describe('Web Shell 入口', () => {
-  it('running web 返回可达 127.0.0.1 地址；非 running → 409', async () => {
+  it('running web 返回可达 127.0.0.1 地址（探针过）；非 running → 409', async () => {
     await app.close();
+    // 探针需真监听：本地起一个替身 shell
+    const { createServer } = await import('node:http');
+    const shellSrv = createServer((_q, s) => s.end('<html>shell</html>'));
+    await new Promise<void>((r) => shellSrv.listen(0, '127.0.0.1', () => r()));
+    const shellPort = (shellSrv.address() as { port: number }).port;
     const connector = {
-      getBaseUrl: async () => 'http://127.0.0.1:45001',
+      getBaseUrl: async () => `http://127.0.0.1:${shellPort}`,
+      invalidate: () => undefined,
       dispose: async () => undefined,
     };
     app = buildApp({
@@ -96,10 +102,11 @@ describe('Web Shell 入口', () => {
     db.prepare('UPDATE handoffs SET pod_name=? WHERE id=?').run('ah-web-sh1', 'hf-sh1');
     const ok = await app.inject({ method: 'GET', url: '/api/handoffs/hf-sh1/shell-url', headers: auth() });
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toEqual({ url: 'http://127.0.0.1:45001', reachable: true });
+    expect(ok.json()).toEqual({ url: `http://127.0.0.1:${shellPort}`, reachable: true });
 
     insertHandoff('hf-sh2', 'done');
     const bad = await app.inject({ method: 'GET', url: '/api/handoffs/hf-sh2/shell-url', headers: auth() });
     expect(bad.statusCode).toBe(409);
+    shellSrv.close();
   });
 });
