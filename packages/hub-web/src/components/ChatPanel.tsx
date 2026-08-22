@@ -46,6 +46,21 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
     };
   }, [detail.id, detail.status]);
 
+  // port-forward 可能中途死掉（hub 重启/瞬断）：no-cors 探针拒绝即重取入口换 src
+  useEffect(() => {
+    if (!shell?.reachable) return;
+    const timer = setInterval(() => {
+      fetch(shell.url, { mode: 'no-cors' }).catch(() => {
+        fetchShellUrl(detail.id)
+          .then((r) => {
+            if (r.reachable && r.url !== shell.url) setShell(r);
+          })
+          .catch(() => undefined);
+      });
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [shell, detail.id]);
+
   const startResize = (e: ReactPointerEvent) => {
     e.preventDefault();
     const startX = e.clientX;

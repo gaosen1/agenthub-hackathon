@@ -13,6 +13,8 @@ export interface PodRef {
 
 export interface SandboxConnector {
   getBaseUrl(pod: PodRef, port: number): Promise<string>;
+  /** 废弃指定端口缓存通道（探针失败后重建）；Direct 为 no-op */
+  invalidate(pod: PodRef, port: number): void;
   dispose(pod: PodRef): Promise<void>;
 }
 
@@ -28,6 +30,10 @@ export class DirectConnector implements SandboxConnector {
 
   async dispose(): Promise<void> {
     // 无状态，无需清理
+  }
+
+  invalidate(): void {
+    // Direct 无缓存通道
   }
 }
 
@@ -68,6 +74,15 @@ export class PortForwardConnector implements SandboxConnector {
     });
     this.forwards.set(key, { server, localPort });
     return `http://127.0.0.1:${localPort}`;
+  }
+
+  invalidate(pod: PodRef, port: number): void {
+    const key = this.keyOf(pod, port);
+    const entry = this.forwards.get(key);
+    if (entry) {
+      entry.server.close();
+      this.forwards.delete(key);
+    }
   }
 
   async dispose(pod: PodRef): Promise<void> {

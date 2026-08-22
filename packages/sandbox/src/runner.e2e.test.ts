@@ -38,6 +38,7 @@ if (args[0] === 'serve') {
   const http = await import('node:http');
   const { execFileSync } = await import('node:child_process');
   const fs = await import('node:fs');
+  const port = Number(args[args.indexOf('--port') + 1] || 8081);
   const dbg = (s) => { try { if (process.env.QWEN_STUB_LOG) fs.appendFileSync(process.env.QWEN_STUB_LOG, s + '\\n'); } catch (e) {} };
   dbg('boot ' + args.join(' '));
   let sseRes = null;
@@ -75,7 +76,7 @@ if (args[0] === 'serve') {
       return;
     }
     s.end('ok');
-  }).listen(8081);
+  }).listen(port);
 } else if (args.includes('--resume')) {
   const { execFileSync } = await import('node:child_process');
   execFileSync('git', ['-c','user.name=cloud','-c','user.email=c@c','commit','--allow-empty','-m','cloud-work'], { cwd: process.cwd() });
@@ -115,6 +116,8 @@ if (args[0] === 'serve') {
 
   // runner 环境（必须在 import runner 前设好）
   process.env.QWEN_BIN = stub;
+  // 包内并行 worker 隔离：本文件用独立 serve 端口（ide.test 占 8081）
+  process.env.AGENTHUB_SERVE_PORT = '8091';
   process.env.QWEN_HOME_DIR = join(root, 'qwen-home-live');
   process.env.RUNNER_WORK_DIR = join(root, 'runner-work');
   delete process.env.RUNNER_TOKEN;
@@ -124,6 +127,7 @@ afterAll(async () => {
   const { stopServe } = await import('./qwen.js');
   await stopServe();
   httpServer.close();
+  delete process.env.AGENTHUB_SERVE_PORT;
   await fs.rm(root, { recursive: true, force: true });
 });
 

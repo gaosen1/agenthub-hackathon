@@ -5,6 +5,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { appendLog } from './state.js';
 
 const QWEN_BIN = process.env.QWEN_BIN ?? 'qwen';
+/** serve 端口可 env 覆盖（默认 8081）：包内并行测试文件各自隔离，避免 EADDRINUSE */
+const servePort = (): string => process.env.AGENTHUB_SERVE_PORT ?? '8081';
 
 export interface ServeSpec {
   mode: 'web' | 'bot';
@@ -25,7 +27,7 @@ export function serveArgs(spec: ServeSpec): string[] {
     '--hostname',
     '0.0.0.0',
     '--port',
-    '8081',
+    servePort(),
     '--workspace',
     spec.workspacePath,
     '--allow-origin',
@@ -83,7 +85,7 @@ export async function waitServeReady(mode: 'web' | 'bot', timeoutMs = 60_000): P
   while (Date.now() < deadline) {
     if (!serveAlive()) throw new Error('qwen serve exited during startup');
     try {
-      await fetch('http://127.0.0.1:8081/', { signal: AbortSignal.timeout(2000) });
+      await fetch(`http://127.0.0.1:${servePort()}/`, { signal: AbortSignal.timeout(2000) });
       return; // 任何 HTTP 响应（含 401）都说明端口已起
     } catch {
       await new Promise((r) => setTimeout(r, 1000));
@@ -153,7 +155,7 @@ export async function runTaskViaServe(
   task: string,
   serveToken?: string,
 ): Promise<number> {
-  const base = 'http://127.0.0.1:8081';
+  const base = `http://127.0.0.1:${servePort()}`;
   const auth: Record<string, string> = serveToken ? { authorization: `Bearer ${serveToken}` } : {};
   const headers: Record<string, string> = { 'content-type': 'application/json', ...auth };
   let rpcId = 0;
