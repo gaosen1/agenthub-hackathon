@@ -37,6 +37,16 @@ describe('ChatPanel Web Shell 承载（running）', () => {
     expect(frame).toHaveAttribute('src', 'http://127.0.0.1:55512');
   });
 
+  it('bot 载体 running 显示钉钉引导，不请求 shell 入口', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    mount({ ...detail, kind: 'bot' } as unknown as HandoffDetail);
+    expect(await screen.findByText(/task 先 headless 执行/)).toBeInTheDocument();
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes('/shell-url'))).toBe(false);
+    expect(screen.queryByTitle('Qwen Code Web Shell')).toBeNull();
+  });
+
   it('running 但入口报错时显示诚实空态，无 iframe', async () => {
     vi.stubGlobal(
       'fetch',
