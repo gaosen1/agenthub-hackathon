@@ -11,13 +11,17 @@ const STRIP_HEADERS = ['content-security-policy', 'x-frame-options'];
 
 let singleton: Server | null = null;
 
-export function startShellProxy(targetPort: number, listenPort: number): void {
+export function startShellProxy(targetPort: number, listenPort: number, runnerPort?: number): void {
   if (singleton) return; // 模块级单例：重复 /load 不二次 bind
   const server = createServer((req, res) => {
+    // Aone 网关只稳定代理 8082 链：runner API 挂 /__runner/ 前缀同端口暴露，此处剥前缀转 runnerPort
+    const isRunner = runnerPort !== undefined && (req.url ?? '').startsWith('/__runner/');
+    const port = isRunner ? runnerPort! : targetPort;
+    const path = isRunner ? (req.url ?? '').slice('/__runner'.length) || '/' : req.url;
     // qwen serve（vite 内核）校验 Host：客户端原始 Host 带代理端口会被 403 Invalid Host，改写为真实目标
-    const headers = { ...req.headers, host: `127.0.0.1:${targetPort}` };
+    const headers = { ...req.headers, host: `127.0.0.1:${port}` };
     const proxyReq = request(
-      { host: '127.0.0.1', port: targetPort, method: req.method, path: req.url, headers },
+      { host: '127.0.0.1', port, method: req.method, path, headers },
       (pr) => {
         const headers = { ...pr.headers };
         for (const h of STRIP_HEADERS) delete headers[h];
@@ -53,48 +57,5 @@ export function startShellProxy(targetPort: number, listenPort: number): void {
   });
   server.listen(listenPort, '0.0.0.0', () => {
     singleton = server;
-  });
-}
-
-let runnerSingleton: Server | null = null;
-
-/**
- * runner API 绕行代理：Aone 入口网关对 8080 端口有特殊处理（实测空 200，疑 execd 保留），
- * 裸代理 8085→8080 透明转发（含 WS），网关侧改走 8085。
- */
-export function startRunnerProxy(targetPort: number, listenPort: number): void {
-  if (runnerSingleton) return;
-  const server = createServer((req, res) => {
-    const proxyReq = request(
-      { host: '127.0.0.1', port: targetPort, method: req.method, path: req.url, headers: req.headers },
-      (pr) => {
-        res.writeHead(pr.statusCode ?? 502, pr.headers);
-        pr.on('data', (c: Buffer) => res.write(c));
-        pr.on('end', () => res.end());
-      },
-    );
-    proxyReq.on('error', () => {
-      if (!res.headersSent) res.writeHead(502);
-      res.end('runner proxy error');
-    });
-    req.pipe(proxyReq);
-  });
-  server.on('upgrade', (req, socket, head) => {
-    const up = connect(targetPort, '127.0.0.1', () => {
-      const lines = [`${req.method} ${req.url} HTTP/1.1`];
-      for (let i = 0; i < req.rawHeaders.length; i += 2) lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
-      up.write(lines.join('\r\n') + '\r\n\r\n');
-      if (head.length) up.write(head);
-      up.pipe(socket);
-      socket.pipe(up);
-    });
-    up.on('error', () => socket.destroy());
-    socket.on('error', () => up.destroy());
-  });
-  server.on('error', () => {
-    runnerSingleton = null;
-  });
-  server.listen(listenPort, '0.0.0.0', () => {
-    runnerSingleton = server;
   });
 }

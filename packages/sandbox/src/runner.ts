@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, computeLockHash, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
 import { allLogs, appendLog, logsAfter, state } from './state.js';
 import { runTask, runTaskViaServe, startServe, stopServe, waitServeReady } from './qwen.js';
-import { startShellProxy, startRunnerProxy } from './shell-proxy.js';
+import { startShellProxy } from './shell-proxy.js';
 import { ensureIde, ideStatus } from './ide.js';
 import { notifyGroups } from './dingtalk.js';
 import {
@@ -251,7 +251,7 @@ export function buildRunner(): FastifyInstance {
           await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName });
           await waitServeReady('bot');
           // 8082 头部改写代理：剥 serve 的 frame-ancestors 'none'，侧栏 iframe 可达（同 web 载体）
-          startShellProxy(Number(process.env.AGENTHUB_SERVE_PORT ?? 8081), 8082);
+          startShellProxy(Number(process.env.AGENTHUB_SERVE_PORT ?? 8081), 8082, Number(process.env.RUNNER_PORT ?? 8080));
           state.serveReady = true;
           appendLog('ok', 'bot serve ready (dingtalk stream connected on qwen side)');
           // task 经 serve ACP 流式执行（侧栏 Web Shell 实时可见）；serve 路径不可用时回退 headless 续跑
@@ -286,7 +286,7 @@ export function buildRunner(): FastifyInstance {
         await startServe({ mode: 'web', workspacePath: manifest.workspacePath, serveToken });
         await waitServeReady('web');
         // 8082 头部改写代理：剥 serve 的 frame-ancestors 'none'，侧栏 iframe 可达
-        startShellProxy(Number(process.env.AGENTHUB_SERVE_PORT ?? 8081), 8082);
+        startShellProxy(Number(process.env.AGENTHUB_SERVE_PORT ?? 8081), 8082, Number(process.env.RUNNER_PORT ?? 8080));
         state.serveReady = true;
         appendLog('ok', 'qwen serve ready');
         if (body.task) {
@@ -450,8 +450,6 @@ if (process.env.VITEST === undefined) {
     .listen({ port: PORT, host: '0.0.0.0' })
     .then(() => {
       appendLog('sys', `runner listening on :${PORT} (mode=${state.mode})`);
-      // Aone 网关对 8080 特殊处理（空 200）：runner API 另经 8085 绕行代理暴露（启动期即起，/load 依赖）
-      startRunnerProxy(PORT, 8085);
       // bot 模式：自动写 settings.json + 启动 qwen serve（无需 /load）
       if (state.mode === 'bot') {
         const botName = process.env.BOT_NAME ?? 'bot';
