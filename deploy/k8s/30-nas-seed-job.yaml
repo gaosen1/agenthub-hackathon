@@ -7,8 +7,12 @@
 # 目录约定（runner ide.ts 依赖）：<path>/tools/code-server/<version>/ + current 软链
 # 升级 code-server：改 CODE_SERVER_VERSION 重跑本 Job，current 软链原子切换。
 #
-# 注意：Job 需要对 NAS 的读写挂载，因此与沙箱的只读挂载不同；
-# 若集群全量使用 ACS 弹性算力，保留下方 nodeSelector/tolerations，否则删除。
+# 真云踩坑（已固化进本清单）：
+#   1. ECI/ACS 挂载 NFS 子路径时不会自动创建目录（FailedMount: file does not exist），
+#      因此挂 NAS 根目录，由脚本自己 mkdir 子目录；
+#   2. 镜像必须用集群可拉的（如 ACR 内的沙箱镜像）；docker.io 与 ACR 里不存在的 tag 都会 ErrImagePull；
+#   3. 集群出网可能到不了 GitHub/ghproxy，下载源建议先传 OSS 再用内网签名 URL；
+#   4. current 必须用相对软链：消费方挂载点（/mnt/shared）与播种方（/nas）不同，绝对链会断。
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -36,14 +40,16 @@ spec:
               TMP="$DEST/.$VER.tmp"
               mkdir -p "$TMP"
               echo "downloading code-server v$VER ..."
-              # 集群出网受限时，可先把 tar.gz 传到 OSS/内网源，再改这里的 URL
+              # 集群出网受限时，先把 tar.gz 传到 OSS bucket，再用内网签名 URL 替换下行地址：
+              #   https://<bucket>.oss-<region>-internal.aliyuncs.com/tools/code-server-<ver>.tar.gz?<sig>
               wget -q -O /tmp/cs.tar.gz \
                 "https://github.com/coder/code-server/releases/download/v$VER/code-server-$VER-linux-amd64.tar.gz"
               tar -xzf /tmp/cs.tar.gz -C "$TMP" --strip-components=1
               # 原子发布：先落版本目录，再切 current 软链，避免读到半成品
               rm -rf "$DEST/$VER"
               mv "$TMP" "$DEST/$VER"
-              ln -sfn "$DEST/$VER" "$DEST/current"
+              # 相对软链：消费方挂载点与播种方不同（/mnt/shared vs /nas），绝对链必断
+              ln -sfn "$VER" "$DEST/current"
               "$DEST/current/bin/code-server" --version
               echo "seeded: $DEST/current -> $DEST/$VER"
           volumeMounts:

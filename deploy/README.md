@@ -28,3 +28,9 @@ deploy/
 
 升级 code-server：改 Job 里 `CODE_SERVER_VERSION` 重跑，`current` 软链原子切换；
 旧版本目录可事后手动清理。未配置 NAS 的集群点「打开 IDE」会得到明确提示，不影响其他功能。
+
+真云踩坑（已固化进 Job 清单，此处留索引）：
+- ECI/ACS 挂 NFS 子路径不会自动建目录 → 挂根目录 + 脚本内 mkdir；
+- 集群拉不到 docker.io，镜像用 ACR 已有的（沙箱镜像内 wget 缺失时下载行换 node fetch）；
+- 集群出网到不了 GitHub → 本地下载 tar.gz 传 OSS，用内网签名 URL；
+- `current` 用相对软链，绝对路径在消费方挂载点（/mnt/shared）必断。
