@@ -22,7 +22,8 @@ export function serveArgs(spec: ServeSpec): string[] {
     // bot 也必须固定端口：runTaskViaServe（ACP）与 shell-proxy 都按 servePort() 寻址
     return ['serve', '--workspace', spec.workspacePath, '--channel', spec.botName ?? '', '--port', servePort()];
   }
-  // --allow-origin 同时充作 web-shell 的 frame-ancestors：允许 hub 源 iframe 嵌入原生 Shell
+  // --allow-origin '*'：web-shell iframe 的文档源随后端变化（Aone 网关每沙箱子域 / port-forward 127.0.0.1），
+  // 无法枚举 hub 源；qwen serve 要求 '*' 必须配 bearer token（QWEN_SERVER_TOKEN 已注入），网关 URL 本身即密钥
   return [
     'serve',
     '--hostname',
@@ -32,7 +33,7 @@ export function serveArgs(spec: ServeSpec): string[] {
     '--workspace',
     spec.workspacePath,
     '--allow-origin',
-    process.env.AGENTHUB_WEB_ORIGIN ?? 'http://localhost:4180',
+    process.env.AGENTHUB_WEB_ORIGIN ?? '*',
   ];
 }
 
