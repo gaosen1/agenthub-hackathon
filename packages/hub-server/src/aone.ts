@@ -16,17 +16,26 @@ export interface AoneSandboxLike {
   kill(): Promise<void>;
   close(): Promise<void>;
 }
+export interface AoneManagerLike {
+  getSandboxInfo(id: string): Promise<{ status?: { state?: string } }>;
+  close(): Promise<void>;
+}
 export interface AoneSdkLike {
-  create(opts: Record<string, unknown>): Promise<AoneSandboxLike>;
-  connect(opts: Record<string, unknown>): Promise<AoneSandboxLike>;
+  Sandbox: {
+    create(opts: Record<string, unknown>): Promise<AoneSandboxLike>;
+    connect(opts: Record<string, unknown>): Promise<AoneSandboxLike>;
+  };
+  SandboxManager: {
+    create(opts: Record<string, unknown>): Promise<AoneManagerLike>;
+  };
 }
 
 export const aoneDeps = {
   loadSdk: async (): Promise<AoneSdkLike> => {
     const spec = '@ali/aone-sandbox';
     try {
-      const m = (await import(/* @vite-ignore */ spec)) as unknown as { Sandbox: AoneSdkLike };
-      return m.Sandbox;
+      const m = (await import(/* @vite-ignore */ spec)) as unknown as AoneSdkLike;
+      return m;
     } catch (e) {
       throw new Error(
         `SANDBOX_BACKEND=aone 需要内网 SDK @ali/aone-sandbox（内网 registry 安装；公有云请用 SANDBOX_BACKEND=k8s）：${e instanceof Error ? e.message : String(e)}`,
@@ -59,6 +68,7 @@ export class AoneOrchestrator implements PodOrchestrator {
   private handles = new Map<string, AoneSandboxLike>();
   private labels = new Map<string, Record<string, string>>();
   private secrets = new Map<string, Record<string, string>>();
+  private manager: AoneManagerLike | undefined;
 
   constructor(private cfg: AoneConfig, private sdk: AoneSdkLike) {}
 
@@ -66,11 +76,16 @@ export class AoneOrchestrator implements PodOrchestrator {
     return { connectionConfig: { apiKey: this.cfg.apiKey } };
   }
 
+  private async mgr(): Promise<AoneManagerLike> {
+    if (!this.manager) this.manager = await this.sdk.SandboxManager.create(this.conn());
+    return this.manager;
+  }
+
   /** 按 id 取句柄；hub 重启后 map 丢失时经 connect 重连（readiness 失败不杀远端实例） */
   async handle(name: string): Promise<AoneSandboxLike> {
     const hit = this.handles.get(name);
     if (hit) return hit;
-    const sb = await this.sdk.connect({ ...this.conn(), sandboxId: name });
+    const sb = await this.sdk.Sandbox.connect({ ...this.conn(), sandboxId: name });
     this.handles.set(name, sb);
     return sb;
   }
@@ -78,7 +93,7 @@ export class AoneOrchestrator implements PodOrchestrator {
   private async provision(spec: SandboxPodSpec): Promise<string> {
     const env: Record<string, string> = { ...spec.env };
     for (const ref of spec.secretRefs) Object.assign(env, this.secrets.get(ref) ?? {});
-    const sb = await this.sdk.create({
+    const sb = await this.sdk.Sandbox.create({
       ...this.conn(),
       dynamicTemplate: { image: this.cfg.image, entrypoint: this.cfg.entrypoint },
       timeoutSeconds: this.cfg.timeoutSeconds,
@@ -115,14 +130,18 @@ export class AoneOrchestrator implements PodOrchestrator {
   }
 
   async getPodPhase(name: string): Promise<PodPhase> {
-    // 本 hub 未登记（重启前的旧实例/他 hub 所建）直接 gone：
-    // sdk.connect 对不存在实例会空等 readiness 超时，recover 逐条调用会阻塞 worker 启动数分钟
-    if (!this.handles.has(name) && !this.labels.has(name)) return 'gone';
-    const sb = await this.handle(name).catch(() => undefined);
-    if (!sb) return 'gone';
-    const info = await sb.getInfo().catch(() => undefined);
-    const st = info?.status?.state;
-    return (st && STATE_TO_PHASE[st]) || 'pending';
+    // 本 hub 登记的走句柄；未登记的（重启前所建）走 manager 轻量查询，
+    // 不用 sdk.connect（对不存在实例会空等 readiness 超时，阻塞 recover）
+    if (this.handles.has(name) || this.labels.has(name)) {
+      const sb = await this.handle(name).catch(() => undefined);
+      if (!sb) return 'gone';
+      const info = await sb.getInfo().catch(() => undefined);
+      const st = info?.status?.state;
+      return (st && STATE_TO_PHASE[st]) || 'pending';
+    }
+    const info = await (await this.mgr()).getSandboxInfo(name).catch(() => undefined);
+    if (!info?.status?.state) return 'gone';
+    return STATE_TO_PHASE[info.status.state] ?? 'pending';
   }
 
   /** v1：返回本 hub 知晓的实例；全量查询走 SandboxManager.listSandboxInfos（后续迭代） */
