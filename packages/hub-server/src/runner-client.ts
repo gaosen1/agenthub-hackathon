@@ -56,7 +56,8 @@ export class RunnerClient {
   }
 
   ensureIde(): Promise<RunnerIdeStatusResp> {
-    return this.call('POST', '/ide/ensure');
+    // 空 {} 而非无 body：call 固定带 application/json 头，fastify 拒绝空 JSON body
+    return this.call('POST', '/ide/ensure', {});
   }
 
   ideStatus(): Promise<RunnerIdeStatusResp> {
