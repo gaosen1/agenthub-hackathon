@@ -91,6 +91,7 @@ describe('Web Shell 入口', () => {
       getBaseUrl: async () => `http://127.0.0.1:${shellPort}`,
       invalidate: () => undefined,
       dispose: async () => undefined,
+      browserReachable: (url: string) => url.startsWith('http://127.0.0.1'),
     };
     app = buildApp({
       db,
