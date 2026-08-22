@@ -10,6 +10,7 @@ import { openDb } from './db.js';
 import { createOssClient } from './oss.js';
 import { DirectConnector, PortForwardConnector, type SandboxConnector } from './connector.js';
 import { K8sOrchestrator, loadKube, sandboxImage } from './k8s.js';
+import { AoneConnector, AoneOrchestrator, aoneDeps } from './aone.js';
 import { Worker } from './worker.js';
 import { Notifier } from './notifier.js';
 
@@ -27,10 +28,39 @@ mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = openDb(DB_PATH);
 const signer = createOssClient();
 
-// K8s 编排装配：kubeconfig 不可用时降级为纯控制面（HUB_NO_K8S=1 显式关闭）
+// 沙箱后端装配：aone（弹内免费算力）| k8s（公有云默认）；不可用时降级为纯控制面
 let sandbox: SandboxDeps | undefined;
 let worker: Worker | undefined;
-if (process.env.HUB_NO_K8S !== '1') {
+if (process.env.SANDBOX_BACKEND === 'aone') {
+  try {
+    const apiKey = process.env.AONE_API_KEY;
+    if (!apiKey) throw new Error('AONE_API_KEY is required for SANDBOX_BACKEND=aone');
+    const sdk = await aoneDeps.loadSdk();
+    const orchestrator = new AoneOrchestrator(
+      {
+        apiKey,
+        image: process.env.AONE_IMAGE ?? sandboxImage(),
+        entrypoint: process.env.AONE_ENTRYPOINT ?? 'cd /app && exec node dist/runner.js',
+        timeoutSeconds: Number(process.env.AONE_TTL_SECONDS ?? 86400),
+        resource: { cpu: '2', memory: '4Gi' },
+      },
+      sdk,
+    );
+    const connector = new AoneConnector(orchestrator);
+    worker = new Worker(
+      db,
+      orchestrator,
+      connector,
+      signer,
+      { namespace: 'aone', idleTtlMinutes: Number(process.env.SANDBOX_IDLE_TTL_MINUTES ?? 120) },
+      SECRET,
+      new Notifier(db, SECRET),
+    );
+    sandbox = { connector, orchestrator, namespace: 'aone', worker, image: process.env.AONE_IMAGE ?? sandboxImage(), acs: false };
+  } catch (e) {
+    console.warn(`aone backend unavailable: ${e instanceof Error ? e.message : String(e)}`);
+  }
+} else if (process.env.HUB_NO_K8S !== '1') {
   try {
     const kc = loadKube();
     const orchestrator = new K8sOrchestrator(kc, {
