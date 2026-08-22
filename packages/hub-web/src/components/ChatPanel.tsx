@@ -172,20 +172,18 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
     };
   }, [detail.id, detail.status, isRunning]);
 
-  // port-forward 可能中途死掉（hub 重启/瞬断）：no-cors 探针拒绝即重取入口换 src
+  // 入口可能中途死掉（hub 重启/port-forward 瞬断），首探也可能撞上沙箱冷启动未就绪：
+  // 周期重取 shell-url，reachable 翻转或 url 变化即更新（旧条件漏掉同 url 的 false→true 翻转，
+  // 会永远卡在「不可直达」占位）
   useEffect(() => {
-    if (!shell?.reachable) return;
+    if (!isRunning) return;
     const timer = setInterval(() => {
-      fetch(shell.url, { mode: 'no-cors' }).catch(() => {
-        fetchShellUrl(detail.id)
-          .then((r) => {
-            if (r.reachable && r.url !== shell.url) setShell(r);
-          })
-          .catch(() => undefined);
-      });
-    }, 15_000);
+      fetchShellUrl(detail.id)
+        .then((r) => setShell((prev) => (prev && prev.url === r.url && prev.reachable === r.reachable ? prev : r)))
+        .catch(() => undefined);
+    }, 8_000);
     return () => clearInterval(timer);
-  }, [shell, detail.id]);
+  }, [detail.id, isRunning]);
 
   const startResize = (e: ReactPointerEvent) => {
     e.preventDefault();
