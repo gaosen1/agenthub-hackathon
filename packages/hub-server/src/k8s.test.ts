@@ -80,6 +80,7 @@ describe('K8sOrchestrator Pod spec', () => {
     const container = pod.spec?.containers?.[0]!;
     expect(container.command).toEqual(['sh', '-c']);
     expect(container.args?.[0]).toContain('ide.js');
+    expect(container.args?.[0]).toContain('dingtalk.js');
   });
 
   it('createDeployment 同时保留 ConfigMap 叠加层与 NAS 挂载', async () => {

@@ -271,7 +271,7 @@ export class K8sOrchestrator implements PodOrchestrator {
       command: ['sh', '-c'],
       // 只覆盖 ConfigMap 里实际提供的模块，其余沿用镜像内置版本
       args: [
-        'for f in runner.js context.js ide.js state.js qwen.js shell-proxy.js; do ' +
+        'for f in runner.js context.js ide.js state.js qwen.js shell-proxy.js dingtalk.js; do ' +
           '[ -f /tmp/runner-cm/$f ] && cp /tmp/runner-cm/$f /app/dist/$f; done; ' +
           'exec node /app/dist/runner.js',
       ],
