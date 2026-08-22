@@ -88,3 +88,6 @@ local.properties
 *.7z
 sandbox-dist/
 hub-dist/
+
+# 浏览器验证临时截图
+screenshot-*.png
