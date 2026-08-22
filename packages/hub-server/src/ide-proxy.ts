@@ -1,5 +1,5 @@
 /**
- * Web IDE（code-server）透明反代管道（/api/handoffs/:id/ide/* → sandbox Pod :8083）
+ * Web IDE（code-server）透明反代管道（/api/handoffs/:id/ide/* → sandbox Pod :8082）
  * - 鉴权：Bearer JWT 或 ensure 时下发的 HttpOnly Cookie ah_ide（iframe 无法附加 Authorization 头）
  * - 支持 WebSocket upgrade（code-server 终端/重连）
  * - 上游根绝对 3xx Location 重写为带前缀路径（code-server 无 base-path 能力的兜底）
@@ -133,6 +133,14 @@ export function pipeUpgrade(
     socket.write(`${lines.join('\r\n')}\r\n\r\n`);
     if (upHead.length > 0) socket.write(upHead);
     if (head.length > 0) upSocket.write(head);
+    // 任一侧断连（浏览器关闭 / port-forward 通道 ECONNRESET）都不能让进程崩：
+    // 裸 socket 无 error 监听时 'error' 事件会直接 crash
+    const teardown = (): void => {
+      upSocket.destroy();
+      socket.destroy();
+    };
+    upSocket.on('error', teardown);
+    socket.on('error', teardown);
     upSocket.pipe(socket);
     socket.pipe(upSocket);
   });
