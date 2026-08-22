@@ -193,6 +193,11 @@ describe('IDE 透明反代', () => {
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe(`/api/handoffs/${hid}/ide/static/x.js`);
   });
+
+  it('hub 自有路径（SPA 路由/静态资源）不被根逃逸钩子劫持', async () => {
+    const res = await app.inject({ method: 'GET', url: '/assets/app.js', headers: { cookie: `ah_ide=${ideCookie}` } });
+    expect(res.statusCode).not.toBe(302);
+  });
 });
 
 describe('WebSocket upgrade', () => {

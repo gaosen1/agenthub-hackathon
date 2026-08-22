@@ -572,8 +572,12 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   });
 
   // 根逃逸兼容：code-server 偶发根绝对资源请求；带活跃 Cookie 时 302 回该用户最近 running handoff 的前缀路径
+  // 跳过 hub 自身服务的路径（SPA 路由/静态资源），避免劫持整站
+  const HUB_OWNED_PATHS = ['/', '/assets/', '/tasks', '/sandbox', '/oss', '/settings'];
   app.addHook('onRequest', async (req, reply) => {
     if (req.url.startsWith('/api')) return;
+    const path = req.url.split('?')[0] ?? '/';
+    if (HUB_OWNED_PATHS.some((p) => (p === '/' ? path === '/' : path.startsWith(p)))) return;
     const uid = verifyIdeToken(req.headers, secret, tvOf);
     if (uid === null) return;
     const row = db
