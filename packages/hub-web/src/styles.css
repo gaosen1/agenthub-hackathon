@@ -416,3 +416,7 @@ select.fi{width:auto;cursor:pointer}
 /* 会话头 Web Shell 入口：发丝线 pill，MASTER 风格 */
 .shell-btn{margin-left:auto;display:inline-flex;align-items:center;gap:4px;border:1px solid var(--n-line2);background:transparent;color:var(--n-tx2);border-radius:999px;height:20px;padding:0 8px;font-size:11px;cursor:pointer;white-space:nowrap;flex-shrink:0}
 .shell-btn:hover{color:var(--n-tx);border-color:var(--n-tx3)}
+
+/* 侧栏完全承载 qwen-code Web Shell：iframe 铺满，空态诚实提示 */
+.shell-frame{flex:1;width:100%;border:0;background:#0d0d0d;min-height:0}
+.shell-empty{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center;color:var(--n-tx3);font-size:12px;line-height:1.7}
