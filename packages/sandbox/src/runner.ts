@@ -250,8 +250,6 @@ export function buildRunner(): FastifyInstance {
           // serve 先起：钉钉流与 Web Shell 立即可用；task 走 serve ACP 流式执行，外部端可实时观看
           await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName });
           await waitServeReady('bot');
-          // 8082 头部改写代理：剥 serve 的 frame-ancestors 'none'，侧栏 iframe 可达（同 web 载体）
-          startShellProxy(Number(process.env.AGENTHUB_SERVE_PORT ?? 8081), 8082, Number(process.env.RUNNER_PORT ?? 8080));
           state.serveReady = true;
           appendLog('ok', 'bot serve ready (dingtalk stream connected on qwen side)');
           // task 经 serve ACP 流式执行（侧栏 Web Shell 实时可见）；serve 路径不可用时回退 headless 续跑
@@ -285,8 +283,6 @@ export function buildRunner(): FastifyInstance {
         await writeCloudModelConfig(qwenHome());
         await startServe({ mode: 'web', workspacePath: manifest.workspacePath, serveToken });
         await waitServeReady('web');
-        // 8082 头部改写代理：剥 serve 的 frame-ancestors 'none'，侧栏 iframe 可达
-        startShellProxy(Number(process.env.AGENTHUB_SERVE_PORT ?? 8081), 8082, Number(process.env.RUNNER_PORT ?? 8080));
         state.serveReady = true;
         appendLog('ok', 'qwen serve ready');
         if (body.task) {
@@ -450,6 +446,9 @@ if (process.env.VITEST === undefined) {
     .listen({ port: PORT, host: '0.0.0.0' })
     .then(() => {
       appendLog('sys', `runner listening on :${PORT} (mode=${state.mode})`);
+      // 启动期即起 8082 链：/__runner/ 暴露 runner API（Aone /load 先于 load 处理可达），
+      // 根路径转发 serve（serve 起来前 502，属预期）
+      startShellProxy(Number(process.env.AGENTHUB_SERVE_PORT ?? 8081), 8082, PORT);
       // bot 模式：自动写 settings.json + 启动 qwen serve（无需 /load）
       if (state.mode === 'bot') {
         const botName = process.env.BOT_NAME ?? 'bot';
