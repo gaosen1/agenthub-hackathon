@@ -19,7 +19,8 @@ let serveProc: ChildProcess | null = null;
 
 export function serveArgs(spec: ServeSpec): string[] {
   if (spec.mode === 'bot') {
-    return ['serve', '--workspace', spec.workspacePath, '--channel', spec.botName ?? ''];
+    // bot 也必须固定端口：runTaskViaServe（ACP）与 shell-proxy 都按 servePort() 寻址
+    return ['serve', '--workspace', spec.workspacePath, '--channel', spec.botName ?? '', '--port', servePort()];
   }
   // --allow-origin 同时充作 web-shell 的 frame-ancestors：允许 hub 源 iframe 嵌入原生 Shell
   return [
