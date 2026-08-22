@@ -562,7 +562,9 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       }
     }
     // 浏览器能否直达由后端决定：port-forward 仅同机；Aone 网关办公网可达
-    return { url, reachable: ok && sb.connector.browserReachable(url) };
+    // 拼 session 路由（web-shell 按 pathname /session/<id> 解析）：iframe 加载即挂当前任务会话流，而非欢迎页
+    const sess = h.session_id ? `/session/${encodeURIComponent(h.session_id)}` : '';
+    return { url: `${url}${sess}`, reachable: ok && sb.connector.browserReachable(url) };
   });
 
   // ── Web IDE（code-server）透明反代：ensure 下发 HttpOnly Cookie，后续请求 Cookie/Bearer 双鉴权 ──
