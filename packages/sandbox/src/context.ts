@@ -167,6 +167,40 @@ async function resolveSenderIds(home: string, botName: string, chatId: string): 
   return [...new Set(ids)];
 }
 
+/** /load 时把 daemon 既有路由（扫所有 hash 子目录，含 DM 三段式 key）改绑到 pushed session，
+ * 写入当前 workspace 的 hash 目录（daemon 只认自己那份）。保留 daemon 自写的 key/target 格式，不猜。 */
+export async function rebindRoutes(home: string, wsHash: string, botName: string, sessionId: string, cwd: string): Promise<number> {
+  const daemonDir = join(home, 'channels', 'daemon');
+  const merged: Record<string, { sessionId?: string; cwd?: string; target?: unknown }> = {};
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fs.readdir(daemonDir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const routes = JSON.parse(await fs.readFile(join(daemonDir, entry.name, 'routes.json'), 'utf8')) as Record<string, { sessionId?: string; cwd?: string; target?: unknown }>;
+      for (const [key, val] of Object.entries(routes)) {
+        if (key.startsWith(`${botName}:`)) merged[key] = val;
+      }
+    } catch {
+      /* skip */
+    }
+  }
+  const n = Object.keys(merged).length;
+  if (n === 0) return 0;
+  for (const val of Object.values(merged)) {
+    val.sessionId = sessionId;
+    val.cwd = cwd;
+  }
+  const dest = routesPath(home, wsHash);
+  await fs.mkdir(dirname(dest), { recursive: true });
+  await fs.writeFile(dest, JSON.stringify(merged, null, 2));
+  return n;
+}
+
 export async function rewriteRoute(
   home: string,
   wsHash: string,

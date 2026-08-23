@@ -23,6 +23,7 @@ import {
   extractDepsCache,
   listChats,
   qwenHome,
+  rebindRoutes,
   restoreContext,
   rewriteRoute,
   unpackInput,
@@ -192,7 +193,7 @@ export function buildRunner(): FastifyInstance {
   // 由 runner 在沙箱内 loopback 代跑并收集全文返回
   app.post('/acp-prompt', async (req) => {
     const body = (req.body ?? {}) as { question?: string; cwd?: string };
-    const ws = body.cwd ?? botWorkspace?.workspacePath ?? join(WORK_ROOT, 'bot-workspace');
+    const ws = body.cwd ?? state.workspacePath ?? botWorkspace?.workspacePath ?? join(WORK_ROOT, 'bot-workspace');
     const answer = await runPromptCollect(ws, body.question ?? '');
     return { answer };
   });
@@ -253,8 +254,11 @@ export function buildRunner(): FastifyInstance {
           const botName = process.env.BOT_NAME ?? 'bot';
           const { writeChannelsConfig } = await import('./context.js');
           await writeChannelsConfig(qwenHome(), botName, manifest.workspacePath);
-          // 在 serve 启动前重绑所有现有群路由，daemon 启动时 lazy-reload routes.json 即生效
+          // 在 serve 启动前重绑路由：daemon 既有路由（含 DM 三段式 key）直接改绑 pushed session，写入当前 hash 目录
           const dHash = daemonWsHash(manifest.workspacePath);
+          const rebound = await rebindRoutes(qwenHome(), dHash, botName, manifest.sessionId, manifest.workspacePath);
+          if (rebound > 0) appendLog('ok', `auto-rebind ${rebound} daemon route(s) -> session ${manifest.sessionId.slice(0, 8)}`);
+          // observed 里仅有群记录、尚无路由的聊天：补绑
           const existingChats = await listChats(qwenHome(), dHash);
           for (const chat of existingChats) {
             await rewriteRoute(qwenHome(), dHash, botName, chat.chatId, manifest.sessionId, manifest.workspacePath);
