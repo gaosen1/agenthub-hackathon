@@ -133,10 +133,22 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
   // 静态托管 hub-web 产物（部署只有一个服务）
   if (opts.webDistDir && existsSync(opts.webDistDir)) {
-    void app.register(fastifyStatic, { root: opts.webDistDir, prefix: '/', wildcard: true });
+    // index.html 必须 no-store：否则发版后浏览器启发式缓存旧 html，用户看着旧包报「没修复」；
+    // /assets/* 带 hash 名，默认缓存安全
+    void app.register(fastifyStatic, {
+      root: opts.webDistDir,
+      prefix: '/',
+      wildcard: true,
+      setHeaders: (res, path) => {
+        if (path.endsWith('index.html')) res.setHeader('cache-control', 'no-store');
+      },
+    });
     app.setNotFoundHandler((req, reply) => {
       // SPA fallback：非 /api 路径回 index.html
-      if (!req.url.startsWith('/api')) return reply.sendFile('index.html');
+      if (!req.url.startsWith('/api')) {
+        void reply.header('cache-control', 'no-store');
+        return reply.sendFile('index.html');
+      }
       return reply.status(404).send({ error: { code: 'ERR_NOT_FOUND', message: 'not found' } });
     });
   }
