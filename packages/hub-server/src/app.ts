@@ -702,36 +702,11 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     createdAt: b.created_at,
   });
 
-  /** bot 沙箱 provision：创建路由与唤醒看门人共用；成功落 running 并返回实际实例名 */
-  const provisionBot = async (uid: number, id: number, name: string, clientId: string, clientSecret: string): Promise<string> => {
+  /** bot 沙箱 provision：委托 worker.wakeBot（创建路由 / push 接力自动唤醒 / 看门人唤醒 三路共用） */
+  const provisionBot = async (id: number): Promise<string> => {
     const sb = sandbox;
-    if (!sb) throw new Error('sandbox backend not configured');
-    const slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'bot';
-    const deployName = `ah-bot-${id}-${slug}`;
-    const runnerToken = newToken();
-    // 先落历史行再建 Pod：建不出来的实例也要在面板上看得见（S6）
-    recordSandboxCreate(db, { podName: deployName, userId: uid, kind: 'bot', image: sb.image ?? sandboxImage(), namespace: sb.namespace, botId: id });
-    const modelRefs = await ensureModelSecret(uid);
-    await sb.orchestrator.createSecret(`bot-${id}`, { DINGTALK_CLIENT_ID: clientId, DINGTALK_CLIENT_SECRET: clientSecret });
-    // 外置快照：PUT 7d 有效（覆盖 24h TTL 内的周期回写），GET 随 provision 即用默认 TTL
-    const snapEnv: Record<string, string> = {};
-    if (asOssClient(signer)?.configured) {
-      // key 跟 uid+name slug（不跟行 id）：DELETE+POST 重建后仍能续上旧快照
-      const snapKey = `bots/${uid}/${slug}/snapshot.tar.gz`;
-      snapEnv.BOT_SNAPSHOT_PUT_URL = await signer.signPut(snapKey, 7 * 86_400);
-      snapEnv.BOT_SNAPSHOT_GET_URL = await signer.signGet(snapKey);
-    }
-    // bot 用 Deployment（非 raw Pod）：ACS 驱逐后自动重建；Aone 后端返回 sandboxId
-    const actualDeploy = await sb.orchestrator.createDeployment({
-      podName: deployName,
-      mode: 'bot',
-      env: { RUNNER_TOKEN: runnerToken, BOT_NAME: name, ...snapEnv },
-      secretRefs: [...modelRefs, `bot-${id}`],
-      labels: { 'agenthub/kind': 'bot', 'agenthub/owner': String(uid), 'agenthub/bot': String(id) },
-    });
-    db.prepare("UPDATE bots SET pod_name=?, runner_token=?, status='running' WHERE id=?").run(actualDeploy, runnerToken, id);
-    recordSandboxReady(db, actualDeploy);
-    return actualDeploy;
+    if (!sb?.worker) throw new Error('sandbox backend not configured');
+    return sb.worker.wakeBot(id);
   };
 
   app.get('/api/bots', async (req, reply) => {
@@ -752,7 +727,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
     if (sandbox) {
       try {
-        await provisionBot(uid, id, body.name, body.clientId, body.clientSecret);
+        await provisionBot(id);
       } catch (e) {
         db.prepare("UPDATE bots SET status='error' WHERE id=?").run(id);
         const m = e instanceof Error ? e.message : String(e);
@@ -792,7 +767,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     try {
       const sb = sandbox;
       if (!sb) throw new Error('sandbox backend not configured');
-      const pod = await provisionBot(b.user_id, b.id, b.name, b.client_id, decryptSecret(b.client_secret_enc, secret));
+      const pod = await provisionBot(b.id);
       const podRef = { namespace: sb.namespace, podName: pod };
       const runnerBase = await sb.connector.getBaseUrl(podRef, 8080);
       const deadline = Date.now() + 90_000;

@@ -158,16 +158,69 @@ export class Worker {
     }
   }
 
-  // queued → provisioning：web 建新 Pod；bot 复用常驻 Pod
+  /** bot 沙箱 provision：创建路由 / push 接力自动唤醒 / 看门人唤醒 三路共用；成功落 running 并返回实际实例名 */
+  async wakeBot(botId: number): Promise<string> {
+    const b = getBot(this.db, botId);
+    if (!b) throw new Error(`bot ${botId} not found`);
+    const slug = b.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'bot';
+    const deployName = `ah-bot-${botId}-${slug}`;
+    const runnerToken = token();
+    // 先落历史行再建 Pod：建不出来的实例也要在面板上看得见（S6）
+    recordSandboxCreate(this.db, { podName: deployName, userId: b.user_id, kind: 'bot', image: this.image, namespace: this.cfg.namespace, botId });
+    const modelRefs = await this.ensureModelSecret(b.user_id);
+    await this.orchestrator.createSecret(`bot-${botId}`, {
+      DINGTALK_CLIENT_ID: b.client_id,
+      DINGTALK_CLIENT_SECRET: decryptSecret(b.client_secret_enc, this.secret),
+    });
+    // 外置快照：PUT 7d 有效（覆盖 24h TTL 内的周期回写），GET 随 provision 即用默认 TTL
+    const snapEnv: Record<string, string> = {};
+    if (asOssClient(this.signer)?.configured) {
+      // key 跟 uid+name slug（不跟行 id）：DELETE+POST 重建后仍能续上旧快照
+      const snapKey = `bots/${b.user_id}/${slug}/snapshot.tar.gz`;
+      snapEnv.BOT_SNAPSHOT_PUT_URL = await this.signer.signPut(snapKey, 7 * 86_400);
+      snapEnv.BOT_SNAPSHOT_GET_URL = await this.signer.signGet(snapKey);
+    }
+    // bot 用 Deployment（非 raw Pod）：ACS 驱逐后自动重建；Aone 后端返回 sandboxId
+    const actualDeploy = await this.orchestrator.createDeployment({
+      podName: deployName,
+      mode: 'bot',
+      env: { RUNNER_TOKEN: runnerToken, BOT_NAME: b.name, ...snapEnv },
+      secretRefs: [...modelRefs, `bot-${botId}`],
+      labels: { 'agenthub/kind': 'bot', 'agenthub/owner': String(b.user_id), 'agenthub/bot': String(botId) },
+    });
+    this.db.prepare("UPDATE bots SET pod_name=?, runner_token=?, status='running' WHERE id=?").run(actualDeploy, runnerToken, botId);
+    recordSandboxReady(this.db, actualDeploy);
+    return actualDeploy;
+  }
+
+  // queued → provisioning：web 建新 Pod；bot 复用常驻 Pod（死了自动唤醒）
   private async handleQueued(): Promise<void> {
     for (const h of listByStatus(this.db, 'queued')) {
       if (h.kind === 'bot') {
         const bot = h.bot_id ? getBot(this.db, h.bot_id) : undefined;
-        if (!bot?.pod_name) {
-          setStatus(this.db, h, 'failed', 'bot sandbox not available');
+        if (!bot) {
+          setStatus(this.db, h, 'failed', 'bot not found');
           continue;
         }
-        patchHandoff(this.db, h.id, { pod_name: bot.pod_name, runner_token: bot.runner_token });
+        const actual = await this.orchestrator.findPodNameByLabel({ 'agenthub/bot': String(bot.id) }).catch(() => undefined);
+        const phase: PodPhase = actual ? await this.orchestrator.getPodPhase(actual).catch(() => 'failed') : 'gone';
+        if (phase !== 'ready') {
+          // push --bot 自动唤醒：沙箱死/过期直接拉新的，用户无需先发消息唤醒
+          const n = this.provisionRetries.get(h.id) ?? 0;
+          try {
+            await this.wakeBot(bot.id);
+            this.provisionRetries.delete(h.id);
+          } catch (e) {
+            if (n + 1 > 3) {
+              this.provisionRetries.delete(h.id);
+              setStatus(this.db, h, 'failed', `bot wake failed: ${e instanceof Error ? e.message : String(e)}`);
+            } else {
+              this.provisionRetries.set(h.id, n + 1);
+            }
+          }
+          continue; // 留在 queued，唤醒成功后下轮发 /load
+        }
+        patchHandoff(this.db, h.id, { pod_name: actual, runner_token: bot.runner_token });
         setStatus(this.db, h, 'provisioning');
         continue;
       }
