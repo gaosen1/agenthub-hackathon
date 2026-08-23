@@ -15,6 +15,7 @@ import { runTask, runTaskViaServe, startServe, stopServe, waitServeReady } from 
 import { startShellProxy } from './shell-proxy.js';
 import { ensureIde, ideStatus } from './ide.js';
 import { notifyGroups } from './dingtalk.js';
+import { restoreBotSnapshot, uploadBotSnapshot } from './bot-snapshot.js';
 import {
   buildDepsCache,
   buildOutput,
@@ -452,9 +453,11 @@ if (process.env.VITEST === undefined) {
       // bot 模式：自动写 settings.json + 启动 qwen serve（无需 /load）
       if (state.mode === 'bot') {
         const botName = process.env.BOT_NAME ?? 'bot';
-        const workspacePath = process.env.BOT_WORKSPACE ?? join(WORK_ROOT, 'bot-workspace');
+        const defaultWs = process.env.BOT_WORKSPACE ?? join(WORK_ROOT, 'bot-workspace');
         void (async () => {
           try {
+            // 外置存储：先还原快照（workspace+chats 跨沙箱续记忆），无快照/失败回退空仓库
+            const workspacePath = await restoreBotSnapshot(process.env.BOT_SNAPSHOT_GET_URL, defaultWs);
             await fs.mkdir(workspacePath, { recursive: true });
             // 初始化 git 仓库（无 handoff 时从空仓库开始）
             await exec('git', ['init', '-b', 'main', workspacePath]).catch(() => undefined);
@@ -466,6 +469,13 @@ if (process.env.VITEST === undefined) {
             await waitServeReady('bot');
             state.serveReady = true;
             appendLog('ok', 'bot serve ready (dingtalk stream connected)');
+            // 删除式沙箱：立即回写一次 + 每 4 分钟周期快照（best-effort）
+            const putUrl = process.env.BOT_SNAPSHOT_PUT_URL;
+            const snap = (): void => {
+              void uploadBotSnapshot(putUrl, botWorkspace?.workspacePath ?? workspacePath);
+            };
+            snap();
+            setInterval(snap, 240_000);
           } catch (e) {
             state.lastError = e instanceof Error ? e.message : String(e);
             appendLog('err', `bot auto-start failed: ${state.lastError}`);
