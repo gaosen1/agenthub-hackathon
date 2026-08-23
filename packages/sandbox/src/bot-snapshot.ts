@@ -59,6 +59,9 @@ export async function restoreBotSnapshot(getUrl: string | undefined, defaultWork
       await fs.rm(dest, { recursive: true, force: true });
       await fs.mkdir(dirname(dest), { recursive: true });
       await fs.cp(chanSrc, dest, { recursive: true });
+      // service.pid 是旧沙箱的运行时预留（exclusive-create），还原后新 serve 会报
+      // channel_service_conflict 拒启动；内存文件（CHANNEL.json）不受影响
+      await fs.rm(join(dest, 'service.pid'), { force: true });
     }
     appendLog('ok', `bot snapshot restored → ${workspacePath}`);
     return workspacePath;
@@ -87,10 +90,11 @@ export async function uploadBotSnapshot(putUrl: string | undefined, workspacePat
       await fs.cp(chatsSrc, join(STAGE, 'chats'), { recursive: true });
       entries.push('chats');
     }
-    // channel memory（CHANNEL.json）随快照走，跨沙箱续记忆
+    // channel memory（CHANNEL.json）随快照走，跨沙箱续记忆；service.pid 是运行时预留，不入快照
     const chanSrc = join(qwenHome(), 'channels');
     if (existsSync(chanSrc)) {
       await fs.cp(chanSrc, join(STAGE, 'channels'), { recursive: true });
+      await fs.rm(join(STAGE, 'channels', 'service.pid'), { force: true });
       entries.push('channels');
     }
     await fs.writeFile(join(STAGE, 'manifest.json'), JSON.stringify({ workspacePath }));
