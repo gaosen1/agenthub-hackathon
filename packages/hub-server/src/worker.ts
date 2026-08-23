@@ -165,6 +165,9 @@ export class Worker {
     const slug = b.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'bot';
     const deployName = `ah-bot-${botId}-${slug}`;
     const runnerToken = token();
+    // serve token：bot serve 以 --allow-origin '*' 承载 Web Shell，qwen 要求配 bearer token；
+    // 随 Deployment env 注入，handoff 下发时复用同一 token 拼 #token=
+    const serveToken = token();
     // 先落历史行再建 Pod：建不出来的实例也要在面板上看得见（S6）
     recordSandboxCreate(this.db, { podName: deployName, userId: b.user_id, kind: 'bot', image: this.image, namespace: this.cfg.namespace, botId });
     const modelRefs = await this.ensureModelSecret(b.user_id);
@@ -186,11 +189,11 @@ export class Worker {
     const actualDeploy = await this.orchestrator.createDeployment({
       podName: deployName,
       mode: 'bot',
-      env: { RUNNER_TOKEN: runnerToken, BOT_NAME: b.name, ...snapEnv },
+      env: { RUNNER_TOKEN: runnerToken, QWEN_SERVER_TOKEN: serveToken, BOT_NAME: b.name, ...snapEnv },
       secretRefs: [...modelRefs, `bot-${botId}`],
       labels: { 'agenthub/kind': 'bot', 'agenthub/owner': String(b.user_id), 'agenthub/bot': String(botId) },
     });
-    this.db.prepare("UPDATE bots SET pod_name=?, runner_token=?, status='running' WHERE id=?").run(actualDeploy, runnerToken, botId);
+    this.db.prepare("UPDATE bots SET pod_name=?, runner_token=?, serve_token=?, status='running' WHERE id=?").run(actualDeploy, runnerToken, serveToken, botId);
     recordSandboxReady(this.db, actualDeploy);
     return actualDeploy;
   }
@@ -222,7 +225,7 @@ export class Worker {
           }
           continue; // 留在 queued，唤醒成功后下轮发 /load
         }
-        patchHandoff(this.db, h.id, { pod_name: actual, runner_token: bot.runner_token });
+        patchHandoff(this.db, h.id, { pod_name: actual, runner_token: bot.runner_token, serve_token: bot.serve_token });
         setStatus(this.db, h, 'provisioning');
         continue;
       }

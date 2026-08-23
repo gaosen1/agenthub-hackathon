@@ -3,7 +3,7 @@
  * 一层剥 CSP 的透明代理，把 OSS 返回包里的 session jsonl 还原进 replay serve 的
  * projects 目录。iframe 指向 replay 代理，终态也用原生 web shell 展示（可读、可继续追问）。
  *
- * 端口/目录均可 env 覆盖；全部懒启动，无返回包（老任务）时上层回退 HistoryView。
+ * 端口/目录均可 env 覆盖；全部懒启动，无返回包（老任务）时上层诚实占位。
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -183,7 +183,7 @@ async function restoreSession(st: ReplayState, sessionId: string, signGet: (key:
 }
 
 /**
- * 终态 handoff 的回放入口 URL；无返回包/还原失败时抛错（上层回退 HistoryView）。
+ * 终态 handoff 的回放入口 URL；无返回包/还原失败时抛错（上层诚实占位）。
  * 先 restore 后 ensure：无包任务不白起本地 serve。
  */
 export async function replayShellUrl(

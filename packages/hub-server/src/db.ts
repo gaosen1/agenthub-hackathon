@@ -132,6 +132,12 @@ export const MIGRATIONS: Array<(db: DB) => void> = [
     const cols = (db.prepare('PRAGMA table_info(handoffs)').all() as Array<{ name: string }>).map((c) => c.name);
     if (!cols.includes('archived')) db.exec('ALTER TABLE handoffs ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
   },
+  // 10：bot serve token——wake 时注入 Deployment env（QWEN_SERVER_TOKEN），
+  // handoff 下发后 shell-url 拼 #token=，Web Shell 在 bot 会话也能流式直连
+  (db) => {
+    const cols = (db.prepare('PRAGMA table_info(bots)').all() as Array<{ name: string }>).map((c) => c.name);
+    if (!cols.includes('serve_token')) db.exec('ALTER TABLE bots ADD COLUMN serve_token TEXT');
+  },
 ];
 
 export function migrate(db: DB): void {

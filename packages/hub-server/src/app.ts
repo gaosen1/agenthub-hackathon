@@ -559,7 +559,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       try {
         return { url: await replayShellUrl(h, (k) => signer.signGet(k)), reachable: true };
       } catch {
-        return { url: '', reachable: false }; // 无返回包/还原失败 → 前端回退 HistoryView
+        return { url: '', reachable: false }; // 无返回包/还原失败 → 前端诚实占位（单 UI：不回退自研聊天界面）
       }
     }
     if (h.status !== 'running') throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);

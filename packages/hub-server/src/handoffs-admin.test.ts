@@ -106,7 +106,7 @@ describe('Web Shell 入口', () => {
     expect(ok.json()).toEqual({ url: `http://127.0.0.1:${shellPort}/session/s`, reachable: true });
 
     insertHandoff('hf-sh2', 'done');
-    // 终态走 replay：无返回包时回退 reachable:false（前端回退 HistoryView），不再 409
+    // 终态走 replay：无返回包时回退 reachable:false（前端诚实占位），不再 409
     const bad = await app.inject({ method: 'GET', url: '/api/handoffs/hf-sh2/shell-url', headers: auth() });
     expect(bad.statusCode).toBe(200);
     expect(bad.json()).toEqual({ url: '', reachable: false });

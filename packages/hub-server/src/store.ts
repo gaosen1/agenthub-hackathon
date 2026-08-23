@@ -61,6 +61,7 @@ export interface BotRow {
   client_secret_enc: string;
   pod_name: string | null;
   runner_token: string | null;
+  serve_token: string | null;
   status: 'creating' | 'running' | 'error' | 'deleted';
   current_handoff_id: string | null;
   created_at: string;
