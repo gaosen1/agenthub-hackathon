@@ -714,11 +714,18 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     recordSandboxCreate(db, { podName: deployName, userId: uid, kind: 'bot', image: sb.image ?? sandboxImage(), namespace: sb.namespace, botId: id });
     const modelRefs = await ensureModelSecret(uid);
     await sb.orchestrator.createSecret(`bot-${id}`, { DINGTALK_CLIENT_ID: clientId, DINGTALK_CLIENT_SECRET: clientSecret });
+    // 外置快照：PUT 7d 有效（覆盖 24h TTL 内的周期回写），GET 随 provision 即用默认 TTL
+    const snapEnv: Record<string, string> = {};
+    if (asOssClient(signer)?.configured) {
+      const snapKey = `bots/${id}/snapshot.tar.gz`;
+      snapEnv.BOT_SNAPSHOT_PUT_URL = await signer.signPut(snapKey, 7 * 86_400);
+      snapEnv.BOT_SNAPSHOT_GET_URL = await signer.signGet(snapKey);
+    }
     // bot 用 Deployment（非 raw Pod）：ACS 驱逐后自动重建；Aone 后端返回 sandboxId
     const actualDeploy = await sb.orchestrator.createDeployment({
       podName: deployName,
       mode: 'bot',
-      env: { RUNNER_TOKEN: runnerToken, BOT_NAME: name },
+      env: { RUNNER_TOKEN: runnerToken, BOT_NAME: name, ...snapEnv },
       secretRefs: [...modelRefs, `bot-${id}`],
       labels: { 'agenthub/kind': 'bot', 'agenthub/owner': String(uid), 'agenthub/bot': String(id) },
     });

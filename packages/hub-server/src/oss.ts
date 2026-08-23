@@ -12,8 +12,8 @@ import { fail } from './state.js';
 const exec = promisify(execCb);
 
 export interface OssSigner {
-  /** PUT 上传签名 URL */
-  signPut(key: string): Promise<string>;
+  /** PUT 上传签名 URL；ttl 默认 30min，bot 快照等长寿命场景可传 7d */
+  signPut(key: string, ttlSeconds?: number): Promise<string>;
   /** GET 下载签名 URL */
   signGet(key: string): Promise<string>;
 }
@@ -153,10 +153,10 @@ class AliOssClient implements OssClient {
     });
   }
 
-  async signPut(key: string): Promise<string> {
+  async signPut(key: string, ttlSeconds?: number): Promise<string> {
     return this.client.signatureUrl(key, {
       method: 'PUT',
-      expires: SIGNED_URL_TTL_SECONDS,
+      expires: ttlSeconds ?? SIGNED_URL_TTL_SECONDS,
       'Content-Type': 'application/gzip',
     });
   }
