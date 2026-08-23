@@ -10,7 +10,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { pipeHttp, type PipeOpts } from './ide-proxy.js';
@@ -28,8 +28,12 @@ function wsHash(workspacePath: string): string {
 
 function baseDir(): string {
   const dbPath = process.env.HUB_DB_PATH ?? './data/hub.sqlite';
-  return join(dirname(dbPath), 'replay');
+  // qwen serve 要求 --workspace 绝对路径（HUB_DB_PATH 常为相对）
+  return resolve(join(dirname(dbPath), 'replay'));
 }
+
+/** 真 qwen 不读 QWEN_HOME_DIR：replay serve 的会话目录只能是真实 ~/.qwen（分片按 replay workspace 哈希，不与本地会话冲突） */
+const replayHome = (): string => join(homedir(), '.qwen');
 
 const PIPE_OPTS: PipeOpts = {
   // serve 对 http 祖先硬设 frame-ancestors 'none'：代理层剥掉才允许 hub 页 iframe 嵌入
@@ -51,14 +55,14 @@ let starting: Promise<ReplayState> | undefined;
 
 async function start(): Promise<ReplayState> {
   const workspace = join(baseDir(), 'workspace');
-  const home = join(baseDir(), 'qwen-home');
+  const home = replayHome();
   await fs.mkdir(workspace, { recursive: true });
   await fs.mkdir(home, { recursive: true });
   const token = randomBytes(24).toString('hex');
 
   const serve = spawn(QWEN_BIN, ['serve', '--hostname', '127.0.0.1', '--port', String(REPLAY_PORT), '--workspace', workspace, '--allow-origin', '*'], {
     cwd: workspace,
-    env: { ...process.env, QWEN_SERVER_TOKEN: token, QWEN_HOME_DIR: home },
+    env: { ...process.env, QWEN_SERVER_TOKEN: token },
     stdio: ['ignore', 'ignore', 'ignore'],
   });
   serve.on('exit', () => {
@@ -145,7 +149,7 @@ export async function replayShellUrl(
 ): Promise<string> {
   // 先判断包/文件存在性再起进程：无包任务不白起本地 serve
   const workspace = join(baseDir(), 'workspace');
-  const home = join(baseDir(), 'qwen-home');
+  const home = replayHome();
   const dest = join(home, 'projects', wsHash(workspace), 'chats', `${h.session_id}.jsonl`);
   if (!existsSync(dest) && !h.output_oss_key) throw new Error('handoff has no output package');
   const st = await ensure();
