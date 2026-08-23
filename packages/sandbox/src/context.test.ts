@@ -27,7 +27,7 @@ describe('writeChannelsConfig', () => {
       clientId: '$DINGTALK_CLIENT_ID',
       clientSecret: '$DINGTALK_CLIENT_SECRET',
       cwd: '/Users/x/proj',
-      sessionScope: 'single',
+      sessionScope: 'user',
       senderPolicy: 'open',
       groupPolicy: 'open',
       dmPolicy: 'open',
