@@ -91,7 +91,8 @@ export class AoneOrchestrator implements PodOrchestrator {
   }
 
   private async provision(spec: SandboxPodSpec): Promise<string> {
-    const env: Record<string, string> = { ...spec.env };
+    // 与 k8s 后端对齐：RUNNER_MODE 决定 runner 起 web/bot 分支（bot 自启 serve+dingtalk stream）
+    const env: Record<string, string> = { RUNNER_MODE: spec.mode, ...spec.env };
     for (const ref of spec.secretRefs) Object.assign(env, this.secrets.get(ref) ?? {});
     const sb = await this.sdk.Sandbox.create({
       ...this.conn(),
