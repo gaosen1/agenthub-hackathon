@@ -134,11 +134,13 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   // 静态托管 hub-web 产物（部署只有一个服务）
   if (opts.webDistDir && existsSync(opts.webDistDir)) {
     // index.html 必须 no-store：否则发版后浏览器启发式缓存旧 html，用户看着旧包报「没修复」；
-    // /assets/* 带 hash 名，默认缓存安全（onRequest 钩子覆盖静态直供与 SPA fallback 两条路径）
+    // /assets/* 带 hash 名，默认缓存安全；html 在 onSend 按 content-type 强覆盖 no-store
+    //（静态层会自写 cache-control，onRequest 设的会被盖；覆盖含 SPA fallback 任意路径）
     void app.register(fastifyStatic, { root: opts.webDistDir, prefix: '/', wildcard: true });
-    app.addHook('onRequest', async (req, reply) => {
-      const p = req.url.split('?')[0] ?? '/';
-      if (p === '/' || p.endsWith('.html')) void reply.header('cache-control', 'no-store');
+    app.addHook('onSend', async (req, reply) => {
+      if (String(reply.getHeader('content-type') ?? '').includes('text/html')) {
+        void reply.header('cache-control', 'no-store', true);
+      }
     });
     app.setNotFoundHandler((req, reply) => {
       // SPA fallback：非 /api 路径回 index.html
