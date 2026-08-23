@@ -11,7 +11,7 @@ import { execFile as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, computeLockHash, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
 import { allLogs, appendLog, logsAfter, state } from './state.js';
-import { runTask, runTaskViaServe, newSessionViaServe, startServe, stopServe, waitServeReady } from './qwen.js';
+import { runTask, runTaskViaServe, newSessionViaServe, runPromptCollect, startServe, stopServe, waitServeReady } from './qwen.js';
 import { startShellProxy } from './shell-proxy.js';
 import { ensureIde, ideStatus } from './ide.js';
 import { notifyGroups } from './dingtalk.js';
@@ -187,6 +187,15 @@ export function buildRunner(): FastifyInstance {
     ...(state.loadedHandoffId ? { loadedHandoffId: state.loadedHandoffId } : {}),
     ...(state.lastError ? { lastError: state.lastError } : {}),
   }));
+
+  // 唤醒 relay：hub 跨 Aone 网关跑 ACP 会丢 SSE 应答帧（GET /acp 400），
+  // 由 runner 在沙箱内 loopback 代跑并收集全文返回
+  app.post('/acp-prompt', async (req) => {
+    const body = (req.body ?? {}) as { question?: string; cwd?: string };
+    const ws = body.cwd ?? botWorkspace?.workspacePath ?? join(WORK_ROOT, 'bot-workspace');
+    const answer = await runPromptCollect(ws, body.question ?? '');
+    return { answer };
+  });
 
   // 下载还原 →（bot）注入 channel 配置/绑定 →（task）headless 续跑 → 拉起 serve
   app.post('/load', async (req, reply) => {

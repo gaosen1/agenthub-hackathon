@@ -32,7 +32,6 @@ import { ossKeyOf, assertOwnedKey, userPrefix, asOssClient, depsCacheKeyOf, deps
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
 import { DingtalkStreamWaker, replyViaWebhook, type DingBotMessage } from './dingtalk-stream.js';
-import { runPromptViaServe } from './acp-prompt.js';
 import { getBot, getHandoff, getUserModelConfig, getSettings, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setSetting, setHandoffArchived, deleteHandoffRow, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
 import { userModelSecret } from './db.js';
 import { RunnerClient, RunnerError } from './runner-client.js';
@@ -784,8 +783,6 @@ export function buildApp(opts: AppOptions): FastifyInstance {
 
   // ── bot 唤醒看门人：沙箱死/过期时 hub 持兜底 Stream 接 @，唤醒后交棒沙箱原生 Stream ──
   const wakers = new Map<number, DingtalkStreamWaker>();
-  /** 与 runner BOT_WORKSPACE 默认值一致（ACP session/new 的 cwd） */
-  const BOT_WORKSPACE_DEFAULT = '/tmp/agenthub-runner/bot-workspace';
   const wakeBot = async (b: BotRow, m: DingBotMessage): Promise<void> => {
     const reply = (text: string): Promise<void> => replyViaWebhook(m.sessionWebhook, b.name, text);
     await reply('云端开发机未启动或已过期，正在唤醒，就绪后自动回复（约 30 秒）…');
@@ -807,8 +804,16 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         if (Date.now() > deadline) throw new Error('bot serve not ready within 90s');
         await new Promise((r) => setTimeout(r, 2000));
       }
-      const serveBase = await sb.connector.getBaseUrl(podRef, 8081);
-      const answer = await runPromptViaServe(serveBase, BOT_WORKSPACE_DEFAULT, m.text || '你好');
+      // 跨网关 ACP 丢帧：改由 runner loopback 代跑（/acp-prompt relay）
+      const row = getBot(db, b.id);
+      const pr = await fetch(`${runnerBase}/acp-prompt`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-runner-token': row?.runner_token ?? '' },
+        body: JSON.stringify({ question: m.text || '你好' }),
+        signal: AbortSignal.timeout(6 * 60_000),
+      });
+      if (!pr.ok) throw new Error(`acp-prompt relay → ${pr.status}`);
+      const answer = ((await pr.json()) as { answer?: string }).answer ?? '';
       await reply(answer ? answer.slice(0, 5000) : '（空回复）');
     } catch (e) {
       db.prepare("UPDATE bots SET status='error' WHERE id=?").run(b.id);
