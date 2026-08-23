@@ -52,6 +52,14 @@ export async function restoreBotSnapshot(getUrl: string | undefined, defaultWork
       await fs.mkdir(dirname(dest), { recursive: true });
       await fs.cp(chatsSrc, dest, { recursive: true });
     }
+    // channels 目录（CHANNEL.json 等 channel memory）一并还原，暗号跨沙箱
+    const chanSrc = join(STAGE, 'channels');
+    if (existsSync(chanSrc)) {
+      const dest = join(qwenHome(), 'channels');
+      await fs.rm(dest, { recursive: true, force: true });
+      await fs.mkdir(dirname(dest), { recursive: true });
+      await fs.cp(chanSrc, dest, { recursive: true });
+    }
     appendLog('ok', `bot snapshot restored → ${workspacePath}`);
     return workspacePath;
   } catch (e) {
@@ -78,6 +86,12 @@ export async function uploadBotSnapshot(putUrl: string | undefined, workspacePat
     if (existsSync(chatsSrc)) {
       await fs.cp(chatsSrc, join(STAGE, 'chats'), { recursive: true });
       entries.push('chats');
+    }
+    // channel memory（CHANNEL.json）随快照走，跨沙箱续记忆
+    const chanSrc = join(qwenHome(), 'channels');
+    if (existsSync(chanSrc)) {
+      await fs.cp(chanSrc, join(STAGE, 'channels'), { recursive: true });
+      entries.push('channels');
     }
     await fs.writeFile(join(STAGE, 'manifest.json'), JSON.stringify({ workspacePath }));
     await tar.c({ cwd: STAGE, file: PKG, gzip: true }, entries);
