@@ -68,6 +68,14 @@ async function start(): Promise<ReplayState> {
   serve.on('exit', () => {
     state = undefined; // 意外退出后下次请求重建
   });
+  // hub 进程退出（tsx watch 重启/停机）时带走 serve，避免孤儿占端口+token 失联
+  process.on('exit', () => {
+    try {
+      serve.kill();
+    } catch {
+      /* 已死 */
+    }
+  });
 
   // 等端口起（任何 HTTP 响应含 401 都算起）
   const deadline = Date.now() + 20_000;
@@ -98,7 +106,8 @@ async function start(): Promise<ReplayState> {
 }
 
 function ensure(): Promise<ReplayState> {
-  if (state) return Promise.resolve(state);
+  if (state && state.serve.exitCode === null) return Promise.resolve(state);
+  state = undefined;
   starting ??= start().finally(() => {
     starting = undefined;
   });
