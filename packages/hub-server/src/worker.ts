@@ -278,8 +278,18 @@ export class Worker {
         const phase = await this.resolvePodPhase(h).catch(() => 'pending' as const);
         if (phase === 'pending') continue;
         if (phase === 'failed' || phase === 'gone') {
+          // bot 的 Pod 是共享常驻沙箱：瞬态 gone 重试，且任何失败都不随 handoff 删 Pod（否则级联打死其他 handoff）
+          if (h.kind === 'bot') {
+            const n = this.provisionRetries.get(h.id) ?? 0;
+            if (n + 1 <= 3) {
+              this.provisionRetries.set(h.id, n + 1);
+              recordEvent(this.db, h.id, 'log', JSON.stringify({ t: nowIso(), tag: 'sys', c: `bot pod ${phase} (${n + 1}/3), retrying` }));
+              continue;
+            }
+            this.provisionRetries.delete(h.id);
+          }
           setStatus(this.db, h, 'failed', `pod ${phase}`);
-          await this.safeDeletePod(h, 'pod-failed');
+          if (h.kind !== 'bot') await this.safeDeletePod(h, 'pod-failed');
           continue;
         }
         const runner = await this.runnerOf(h);
@@ -316,7 +326,8 @@ export class Worker {
         recordEvent(this.db, h.id, 'log', JSON.stringify({ t: nowIso(), tag: 'sys', c: 'sandbox loaded, agent running' }));
       } catch (e) {
         setStatus(this.db, h, 'failed', `load failed: ${msg(e)}`);
-        await this.safeDeletePod(h, 'load-failed');
+        // bot 共享沙箱不随 handoff 回收
+        if (h.kind !== 'bot') await this.safeDeletePod(h, 'load-failed');
       }
     }
   }
