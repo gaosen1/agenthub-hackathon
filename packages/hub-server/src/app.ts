@@ -35,6 +35,7 @@ import { getBot, getHandoff, getUserModelConfig, getSettings, nowIso, patchHando
 import { userModelSecret } from './db.js';
 import { RunnerClient, RunnerError } from './runner-client.js';
 import { IDE_COOKIE, IDE_COOKIE_TTL_SECONDS, pipeHttp, pipeUpgrade, verifyIdeToken } from './ide-proxy.js';
+import { replayShellUrl } from './replay.js';
 import type { SandboxConnector } from './connector.js';
 import { SANDBOX_PORTS, SANDBOX_RESOURCES, SANDBOX_TEMPLATE, sandboxImage, type PodOrchestrator } from './k8s.js';
 import { DEFAULT_ORPHAN_INTERVAL_MS, DEFAULT_WORKER_INTERVAL_MS, type Worker } from './worker.js';
@@ -541,6 +542,14 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   // web/bot 双载体均可：bot 流程 serve 先起（task 走 ACP 流式），侧栏同样可嵌
   app.get('/api/handoffs/:id/shell-url', async (req) => {
     const h = ownHandoff(req);
+    // 终态：沙箱已销毁也返回入口——本地 replay serve 还原 session，侧边栏继续用原生 web shell（单 UI 架构）
+    if (TERMINAL_STATUSES.includes(h.status)) {
+      try {
+        return { url: await replayShellUrl(h, (k) => signer.signGet(k)), reachable: true };
+      } catch {
+        return { url: '', reachable: false }; // 无返回包/还原失败 → 前端回退 HistoryView
+      }
+    }
     if (h.status !== 'running') throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
     const sb = needSandbox();
     if (!h.pod_name) throw fail(409, 'ERR_NOT_READY', 'sandbox not provisioned');

@@ -51,14 +51,22 @@ export function verifyIdeToken(
   return null;
 }
 
-function upstreamHeaders(headers: IncomingHttpHeaders, upstreamHost: string): Record<string, string> {
+function upstreamHeaders(headers: IncomingHttpHeaders, upstreamHost: string, keepAuthorization = false): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(headers)) {
     if (v === undefined || SKIP_REQ_HEADERS.has(k.toLowerCase())) continue;
+    if (!keepAuthorization && k.toLowerCase() === 'authorization') continue;
     out[k] = Array.isArray(v) ? v.join(', ') : v;
   }
   out['host'] = upstreamHost;
   return out;
+}
+
+export interface PipeOpts {
+  /** 额外剥除的响应头（如 replay 代理剥 CSP/X-Frame-Options 以允许 iframe 嵌入） */
+  stripResHeaders?: ReadonlySet<string>;
+  /** 保留客户端 Authorization 透传（replay web-shell 自带 Bearer token） */
+  keepAuthorization?: boolean;
 }
 
 /** HTTP 透明转发：剥前缀后的 upstreamPath 直连 code-server，Location 根绝对路径补前缀 */
@@ -68,6 +76,7 @@ export function pipeHttp(
   upstreamBase: string,
   upstreamPath: string,
   pathPrefix: string,
+  opts?: PipeOpts,
 ): void {
   const u = new URL(upstreamBase);
   const upReq = httpRequest(
@@ -76,14 +85,14 @@ export function pipeHttp(
       port: u.port ? Number(u.port) : 80,
       path: upstreamPath,
       method: raw.method ?? 'GET',
-      headers: upstreamHeaders(raw.headers, u.host),
+      headers: upstreamHeaders(raw.headers, u.host, opts?.keepAuthorization),
     },
     (upRes) => {
       const headers: Record<string, string | string[]> = {};
       for (let i = 0; i < upRes.rawHeaders.length; i += 2) {
         const k = upRes.rawHeaders[i]!.toLowerCase();
         const v = upRes.rawHeaders[i + 1]!;
-        if (SKIP_RES_HEADERS.has(k)) continue;
+        if (SKIP_RES_HEADERS.has(k) || opts?.stripResHeaders?.has(k)) continue;
         if (k === 'location' && v.startsWith('/')) {
           headers[k] = pathPrefix + v;
           continue;
