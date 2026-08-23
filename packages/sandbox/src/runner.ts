@@ -463,6 +463,8 @@ if (process.env.VITEST === undefined) {
             await exec('git', ['init', '-b', 'main', workspacePath]).catch(() => undefined);
             const { writeChannelsConfig } = await import('./context.js');
             await writeChannelsConfig(qwenHome(), botName, workspacePath);
+            // bot 无 /load：模型配置同样须用注入的 OPENAI_* env 覆盖，否则 qwen 落默认提供商挂起（唤醒 #2 超时事故）
+            await writeCloudModelConfig(qwenHome());
             botWorkspace = { workspacePath, wsHash: daemonWsHash(workspacePath), botName };
             appendLog('sys', `bot auto-start: channels config written for ${botName}`);
             await startServe({ mode: 'bot', workspacePath, botName });
