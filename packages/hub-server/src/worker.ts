@@ -180,6 +180,8 @@ export class Worker {
       snapEnv.BOT_SNAPSHOT_PUT_URL = await this.signer.signPut(snapKey, 7 * 86_400);
       snapEnv.BOT_SNAPSHOT_GET_URL = await this.signer.signGet(snapKey);
     }
+    const logPut = await this.logPutUrlFor(deployName);
+    if (logPut) snapEnv.RUNNER_LOG_PUT_URL = logPut;
     // bot 用 Deployment（非 raw Pod）：ACS 驱逐后自动重建；Aone 后端返回 sandboxId
     const actualDeploy = await this.orchestrator.createDeployment({
       podName: deployName,
@@ -238,6 +240,7 @@ export class Worker {
       });
       try {
         const modelRefs = await this.ensureModelSecret(h.user_id);
+        const logPut = await this.logPutUrlFor(podName);
         const actualPod = await this.orchestrator.createPod({
           podName,
           mode: 'web',
@@ -245,6 +248,7 @@ export class Worker {
             RUNNER_TOKEN: runnerToken,
             QWEN_SERVER_TOKEN: serveToken,
             HANDOFF_ID: h.id,
+            ...(logPut ? { RUNNER_LOG_PUT_URL: logPut } : {}),
             // 不注入 AGENTHUB_WEB_ORIGIN：iframe 文档源随后端变化（Aone 每沙箱子域 / port-forward），
             // 无法枚举；runner 侧 serve --allow-origin 默认 '*'（配 QWEN_SERVER_TOKEN，qwen serve 强制要求）
           },
@@ -290,6 +294,7 @@ export class Worker {
           }
           setStatus(this.db, h, 'failed', `pod ${phase}`);
           if (h.kind !== 'bot') await this.safeDeletePod(h, 'pod-failed');
+          void this.mergeArchivedLogs(h);
           continue;
         }
         const runner = await this.runnerOf(h);
@@ -328,7 +333,37 @@ export class Worker {
         setStatus(this.db, h, 'failed', `load failed: ${msg(e)}`);
         // bot 共享沙箱不随 handoff 回收
         if (h.kind !== 'bot') await this.safeDeletePod(h, 'load-failed');
+        void this.mergeArchivedLogs(h);
       }
+    }
+  }
+
+  /** runner 日志归档 URL（7d PUT，key 跟 Pod 名）；OSS 未配置返回 undefined */
+  private async logPutUrlFor(podName: string): Promise<string | undefined> {
+    if (!asOssClient(this.signer)?.configured) return undefined;
+    return this.signer.signPut(`logs/${podName}.jsonl`, 7 * 86_400).catch(() => undefined);
+  }
+
+  /** 沙箱死后从 OSS 归档补取 runner 日志进事件流（每 handoff 仅一次） */
+  private readonly archivedMerged = new Set<string>();
+  private async mergeArchivedLogs(h: HandoffRow): Promise<void> {
+    if (!h.pod_name || this.archivedMerged.has(h.id)) return;
+    this.archivedMerged.add(h.id);
+    try {
+      const url = await this.signer.signGet(`logs/${h.pod_name}.jsonl`);
+      const r = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!r.ok) return;
+      const items = (await r.text())
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as { i?: number });
+      const after = this.logCursors.get(h.id) ?? 0;
+      for (const e of items) {
+        if ((e.i ?? 0) >= after) recordEvent(this.db, h.id, 'log', JSON.stringify(e));
+      }
+      if (items.length > 0) this.logCursors.set(h.id, Math.max(after, (items[items.length - 1]?.i ?? 0) + 1));
+    } catch {
+      // 无归档（旧镜像/未配置）放弃
     }
   }
 
@@ -385,6 +420,7 @@ export class Worker {
           if (runner) await this.relayLogs(h, runner).catch(() => undefined);
           setStatus(this.db, h, 'failed', 'sandbox pod lost');
           await this.safeDeletePod(h, 'pod-lost');
+          void this.mergeArchivedLogs(h);
         }
       }
     }

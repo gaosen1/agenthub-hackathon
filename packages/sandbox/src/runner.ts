@@ -468,6 +468,19 @@ if (process.env.VITEST === undefined) {
     .listen({ port: PORT, host: '0.0.0.0' })
     .then(() => {
       appendLog('sys', `runner listening on :${PORT} (mode=${state.mode})`);
+      // 日志持久化：周期全量上传 OSS（沙箱回收后 hub 从归档补取，避免死后日志丢）
+      const logPutUrl = process.env.RUNNER_LOG_PUT_URL;
+      if (logPutUrl) {
+        const flushLogs = (): void => {
+          void (async () => {
+            const tmp = join(WORK_ROOT, 'runner-logs.jsonl');
+            await fs.writeFile(tmp, allLogs().map((e) => JSON.stringify(e)).join('\n') + '\n').catch(() => undefined);
+            await uploadTo(logPutUrl, tmp).catch(() => undefined);
+          })();
+        };
+        flushLogs();
+        setInterval(flushLogs, 60_000).unref?.();
+      }
       // 启动期即起 8082 链：/__runner/ 暴露 runner API（Aone /load 先于 load 处理可达），
       // 根路径转发 serve（serve 起来前 502，属预期）
       startShellProxy(Number(process.env.AGENTHUB_SERVE_PORT ?? 8081), 8082, PORT);
