@@ -4,15 +4,6 @@
  */
 import type { HandoffDetail, HandoffSummary, SandboxEvent } from '@agenthub/shared/contracts';
 
-/** Chat 消息（本地 UI 模型；真 Hub 联调时由 ACP 流驱动） */
-export interface ChatMsg {
-  role: 'user' | 'agent';
-  via?: string;
-  text: string;
-  tool?: string;
-  time: string;
-}
-
 /** 详情页扩展信息（mock 专用；真 Hub 后由 events/manifest 推导） */
 export interface TaskExtra {
   summary: string;
@@ -25,7 +16,6 @@ export interface TaskExtra {
   pushedAt: string;
   commits: { hash: string; msg: string; files: string; add: string; del: string; time: string }[];
   logs: (SandboxEvent & { id: number })[];
-  chat: ChatMsg[];
   failReason?: string;
 }
 
@@ -134,12 +124,6 @@ export const mockExtras: Record<string, TaskExtra> = {
       { id: 13, t: '14:14:21', tag: 'info', c: '[qwen] 收到远程 Chat 指令：顺便把 OrderController 里的废弃接口清掉' },
       { id: 14, t: '14:14:40', tag: 'tool', c: 'grep_search "@Deprecated" src/order/ — 3 matches' },
     ],
-    chat: [
-      { role: 'agent', text: '已从本地会话恢复上下文（23 轮）。按讨论结论继续：先抽取 OrderStateMachine，再迁移 OrderService 中的状态流转调用点。', time: '14:04' },
-      { role: 'agent', text: '重构完成并通过编译，已提交 b7e21d4。开始补充状态机单元测试。', tool: 'run_command · ./gradlew :order:test', time: '14:12' },
-      { role: 'user', via: '钉钉', text: '顺便把 OrderController 里的废弃接口清掉', time: '14:14' },
-      { role: 'agent', text: '收到。扫描到 3 处 @Deprecated 接口，确认无内部调用后将一并移除，完成后单独提交一个 commit。', tool: 'grep_search · "@Deprecated" src/order/', time: '14:14' },
-    ],
   },
   'hf-7b1e88': {
     summary: '批量迁移 200+ 处 legacy API 调用到 v2 SDK',
@@ -159,11 +143,6 @@ export const mockExtras: Record<string, TaskExtra> = {
       { id: 6, t: '19:01:44', tag: 'sys', c: '开始 packaging：result.bundle（3 commits）+ session 增量（14 轮）' },
       { id: 7, t: '19:02:38', tag: 'ok', c: '返回包已上传 OSS：output.tar.gz (12 MB)，Sandbox 已销毁' },
     ],
-    chat: [
-      { role: 'agent', text: '会话已恢复。按本地讨论确认的 API 映射表开始批量迁移，共扫描到 213 处 legacy 调用。', time: '18:37' },
-      { role: 'user', via: 'Web', text: '迁移完跑一遍全量测试再收尾', time: '18:52' },
-      { role: 'agent', text: '全量回归 412 个用例全部通过，已移除 legacy shim 并完成 3 个 commit。任务收尾，返回包已上传。', tool: 'run_command · pytest (412 passed)', time: '19:01' },
-    ],
   },
   'hf-c204d1': {
     summary: '为特征查询层增加 TTL 缓存与失效策略',
@@ -171,7 +150,6 @@ export const mockExtras: Record<string, TaskExtra> = {
     inputPkg: '58 MB', outputPkg: '—', elapsed: '—', pushedAt: '14:18',
     commits: [],
     logs: [{ id: 1, t: '14:19:02', tag: 'sys', c: '输入包已上传，等待 Worker 领取…' }],
-    chat: [],
   },
   'hf-33e0af': {
     summary: '修复限流配置热更新不生效问题并补充回归用例',
@@ -185,9 +163,6 @@ export const mockExtras: Record<string, TaskExtra> = {
       { id: 2, t: '11:24:50', tag: 'tool', c: 'run_command make integration-test' },
       { id: 3, t: '11:28:31', tag: 'err', c: 'integration-test 依赖内网 etcd 集群，Sandbox 网络不可达 (connection timeout)' },
       { id: 4, t: '11:29:34', tag: 'err', c: '连续 3 次重试失败，任务标记 failed；部分成果已打包回传' },
-    ],
-    chat: [
-      { role: 'agent', text: '集成测试依赖内网 etcd（10.32.x.x:2379），Sandbox 网络不可达，无法继续验证。已将定位结论与 WIP commit 打入返回包，建议 pull 回本地在内网环境完成验证。', time: '11:29' },
     ],
     failReason: '集成测试依赖内网 etcd 集群，Sandbox 网络不可达。已保留 WIP commit 与云端会话记录。',
   },

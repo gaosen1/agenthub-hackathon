@@ -1,6 +1,6 @@
 /**
- * ChatPanel：running 时 iframe 承载 Web Shell（可达嵌入/不可达提示/周期重取换 src）；
- * 终态优先本地 replay serve 的原生 web shell 回放，无返回包时回退只读历史回放。
+ * ChatPanel：单 UI 架构——running 与终态均由 qwen-code 原生 Web Shell iframe 承载
+ * （终态走后端本地 replay serve）；入口不可达/无返回包时诚实占位，无自研聊天 UI 回退。
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen } from '@testing-library/react';
@@ -85,7 +85,7 @@ describe('ChatPanel Web Shell 承载（running）', () => {
   });
 });
 
-describe('ChatPanel 终态历史回放', () => {
+describe('ChatPanel 终态 Web Shell 回放（单 UI）', () => {
   const doneDetail = {
     id: 'hf-done1',
     status: 'done',
@@ -94,33 +94,24 @@ describe('ChatPanel 终态历史回放', () => {
     createdAt: '2026-08-22T10:00:00Z',
   } as unknown as HandoffDetail;
 
-  it('done handoff 渲染 task 指令与 [task] relay 卡片，无 iframe', async () => {
-    const events = {
-      items: [
-        { id: 1, at: '2026-08-22T10:01:00Z', kind: 'log', payload: JSON.stringify({ t: 'x', tag: 'info', c: '[task] 已全部完成' }) },
-      ],
-      nextAfter: 1,
-    };
+  it('done 且 replay serve 可达时继续嵌原生 Web Shell iframe', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn((url: string) => {
-        const body = url.includes('/events') ? events : { items: [] };
-        return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
-      }),
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ url: 'http://127.0.0.1:55700/session/sess-9', reachable: true }), { status: 200 })),
     );
     mount(doneDetail);
-    expect(await screen.findByText('把功能做完')).toBeInTheDocument();
-    expect(await screen.findByText(/已全部完成/)).toBeInTheDocument();
-    expect(screen.getByText(/历史回放/)).toBeInTheDocument();
-    expect(screen.queryByTitle('Qwen Code Web Shell')).toBeNull();
+    const frame = await screen.findByTitle('Qwen Code Web Shell');
+    expect(frame).toHaveAttribute('src', 'http://127.0.0.1:55700/session/sess-9');
+    expect(screen.getByText(/会话回放/)).toBeInTheDocument();
   });
 
-  it('无事件记录时诚实提示，不摆假数据', async () => {
+  it('无返回包时诚实占位，不回退自研聊天 UI', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(() => Promise.resolve(new Response(JSON.stringify({ items: [], nextAfter: 0 }), { status: 200 }))),
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ url: '', reachable: false }), { status: 200 })),
     );
     mount({ ...doneDetail, task: undefined } as unknown as HandoffDetail);
-    expect(await screen.findByText(/无文本记录/)).toBeInTheDocument();
+    expect(await screen.findByText(/Web Shell 回放不可用/)).toBeInTheDocument();
+    expect(screen.queryByTitle('Qwen Code Web Shell')).toBeNull();
   });
 });

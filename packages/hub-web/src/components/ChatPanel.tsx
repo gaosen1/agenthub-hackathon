@@ -1,139 +1,16 @@
 /**
- * 云端会话面板：
- * - running：qwen-code 原生 Web Shell 完全承载（iframe；serve 以 --allow-origin 启动，
- *   shell 可合法被 iframe；流式输出/模式切换/session 重放均由 shell 原生提供）；
- * - 终态（done/failed/…）：沙箱已销毁——优先本地 replay serve 还原 session 继续用原生 web shell 回放；
- *   无返回包/还原失败时回退只读历史回放：hub 事件流里的 task 指令 + runner [task] relay 日志渲染成卡片，
- *   并支持同 session 历次 handoff 逐块向上加载。不摆假数据，无记录时诚实说明。
+ * 云端会话面板（单 UI 架构）：qwen-code 原生 Web Shell 完全承载，不保留任何自研聊天 UI。
+ * - running：iframe 直连沙箱 shell-proxy（8082），流式输出/模式切换/session 重放均由 shell 原生提供；
+ * - 终态（done/failed/…）：沙箱已销毁，后端本地 replay serve 还原 session，侧栏继续原生 web shell 回放；
+ * - 入口不可达/无返回包：诚实占位说明，不摆假数据。
  */
-import { useEffect, useMemo, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import type { HandoffDetail, HandoffEventsResp, SandboxEvent } from '@agenthub/shared/contracts';
-import { fetchHandoffEvents, fetchShellUrl, useDataSource } from '../api/client.js';
-import { useHandoffEvents, useHandoffs } from '../api/hooks.js';
-import type { ChatMsg } from '../api/mock.js';
-import { Markdown } from './Markdown.js';
+import { useEffect, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import type { HandoffDetail } from '@agenthub/shared/contracts';
+import { fetchShellUrl } from '../api/client.js';
 
 const CHAT_W_MIN = 280;
 const CHAT_W_MAX = 640;
 const clampW = (w: number): number => Math.min(CHAT_W_MAX, Math.max(CHAT_W_MIN, w));
-
-/** task 指令 + runner [task] relay 行合并成卡片（当前与历史 handoff 共用） */
-function relayCards(task: string | null | undefined, items: HandoffEventsResp['items']): ChatMsg[] {
-  const out: ChatMsg[] = [];
-  if (task) out.push({ role: 'user', via: 'push --task', text: task, time: '' });
-  for (const e of items) {
-    if (e.kind !== 'log') continue;
-    try {
-      const ev = JSON.parse(e.payload) as SandboxEvent;
-      if (ev.tag === 'info' && ev.c.startsWith('[task] ')) {
-        // runner 按行拆日志；连续的 relay 行属于同一条回答，合并成单卡完整渲染
-        const last = out[out.length - 1];
-        if (last && last.role === 'agent' && last.via === 'task relay') {
-          last.text += `\n${ev.c.slice(7)}`;
-        } else {
-          out.push({ role: 'agent', via: 'task relay', text: ev.c.slice(7), time: '' });
-        }
-      }
-    } catch {
-      /* 非 JSON 日志跳过 */
-    }
-  }
-  return out;
-}
-
-const renderMsg = (c: ChatMsg, key: string | number) => (
-  <div className={`msg ${c.role} fade-in`} key={key}>
-    <div className="av">
-      <i className={`fa-solid ${c.role === 'user' ? 'fa-user' : 'fa-robot'}`} />
-    </div>
-    <div className="bd">
-      <div className="who">
-        {c.role === 'user' ? '我' : 'Cloud Agent'}
-        {c.via && <span className="via">via {c.via}</span>}
-        {c.time ? ` · ${c.time}` : ''}
-      </div>
-      <div className="bubble">
-        {c.role === 'agent' && c.text ? <Markdown text={c.text} /> : c.text}
-        {c.tool && (
-          <div className="tool-call">
-            <i className="fa-solid fa-wrench" />
-            {c.tool}
-          </div>
-        )}
-      </div>
-    </div>
-  </div>
-);
-
-/** 终态 handoff 的只读历史回放（hub 事件流 + 同 session 历次 handoff） */
-function HistoryView({ detail }: { detail: HandoffDetail }) {
-  const isHub = useDataSource() === 'hub';
-  const { data: eventsData } = useHandoffEvents(detail.id, isHub);
-  const cards = useMemo<ChatMsg[]>(
-    () => (isHub ? relayCards(detail.task, eventsData?.items ?? []) : []),
-    [isHub, detail.task, eventsData],
-  );
-
-  // 「加载更多」：同 session 的历次 handoff 对话作为更以前的历史，逐块向上加载
-  const { data: listData } = useHandoffs();
-  const priorHandoffs = useMemo(() => {
-    const all = listData?.items ?? [];
-    return all
-      .filter((h) => h.sessionId === detail.sessionId && h.createdAt < detail.createdAt)
-      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-  }, [listData, detail.sessionId, detail.createdAt]);
-  const [blocks, setBlocks] = useState<Array<{ id: string; label: string; cards: ChatMsg[] }>>([]);
-  const [loadingMore, setLoadingMore] = useState(false);
-  useEffect(() => setBlocks([]), [detail.id]);
-
-  const loadMore = async (): Promise<void> => {
-    const next = priorHandoffs[blocks.length];
-    if (!next || loadingMore) return;
-    setLoadingMore(true);
-    try {
-      const items: HandoffEventsResp['items'] = [];
-      let after = 0;
-      for (let p = 0; p < 10; p++) {
-        const r = await fetchHandoffEvents(next.id, after);
-        items.push(...r.items);
-        after = r.nextAfter;
-        if (r.items.length < 500) break;
-      }
-      const bc = relayCards(next.task, items);
-      if (bc.length === 0) {
-        bc.push({ role: 'agent', via: 'task relay', text: '该 handoff 无文本记录（交互聊天不入事件流，完整对话见本地 session）', time: '' });
-      }
-      setBlocks((b) => [...b, { id: next.id, label: `${next.id} · ${next.createdAt.slice(11, 16)}`, cards: bc }]);
-    } finally {
-      setLoadingMore(false);
-    }
-  };
-
-  return (
-    <div className="chat-body">
-      {isHub && priorHandoffs.length > blocks.length && (
-        <button className="load-more" disabled={loadingMore} onClick={() => void loadMore()}>
-          加载更以前的历史 · 还有 {priorHandoffs.length - blocks.length} 次 handoff
-        </button>
-      )}
-      {[...blocks].reverse().map((b) => (
-        <div key={b.id}>
-          <div className="sysline">
-            <i className="fa-solid fa-flag" /> handoff {b.label} · 更以前的历史
-          </div>
-          {b.cards.map((c, i) => renderMsg(c, `${b.id}-${i}`))}
-        </div>
-      ))}
-      {cards.length === 0 ? (
-        <div className="empty-hint" style={{ textAlign: 'center', padding: '24px 0' }}>
-          {isHub ? '该 handoff 无文本记录（交互聊天不入事件流，完整对话见本地 session）' : '云端会话尚未开始'}
-        </div>
-      ) : (
-        cards.map((c, i) => renderMsg(c, i))
-      )}
-    </div>
-  );
-}
 
 export function ChatPanel({ detail }: { detail: HandoffDetail }) {
   const isRunning = detail.status === 'running';
@@ -215,7 +92,7 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
       <div className="chat-h">
         <div className="t">
           <i className="fa-solid fa-comments" /> 云端会话
-          <span className="via">{shell?.reachable ? (isRunning ? 'qwen-code Web Shell' : 'qwen-code Web Shell · 会话回放') : isRunning ? 'qwen-code Web Shell' : '历史回放（只读）'}</span>
+          <span className="via">{shell?.reachable ? (isRunning ? 'qwen-code Web Shell' : 'qwen-code Web Shell · 会话回放') : 'qwen-code Web Shell'}</span>
         </div>
         <div className="sess">
           <i className="fa-regular fa-file-lines" /> {detail.sessionId}.jsonl
@@ -223,16 +100,16 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
       </div>
       {shell?.reachable ? (
         <iframe className="shell-frame" src={shell.url} title="Qwen Code Web Shell" />
-      ) : isRunning ? (
+      ) : (
         <div className="shell-empty">
           {err
             ? `云端会话不可用：${err}`
             : shell
-              ? 'Web Shell 不可直达：需 hub 与浏览器同机（port-forward），或 hub 部署在集群内'
+              ? isRunning
+                ? 'Web Shell 不可直达：需 hub 与浏览器同机（port-forward），或 hub 部署在集群内'
+                : '该 handoff 无返回包，Web Shell 回放不可用'
               : '正在连接云端会话…'}
         </div>
-      ) : (
-        <HistoryView detail={detail} />
       )}
     </aside>
   );
