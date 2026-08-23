@@ -172,6 +172,9 @@ async function restoreSession(st: ReplayState, sessionId: string, signGet: (key:
     if (!found) throw new Error(`session ${sessionId} not found in output package`);
     await fs.mkdir(dirname(dest), { recursive: true });
     await fs.copyFile(found, dest);
+    // daemon 按 session 内部 cwd 过滤列表：重写为 replay workspace 才可见（回放只读，文件链接不要求存在）
+    const raw = await fs.readFile(dest, 'utf8');
+    await fs.writeFile(dest, raw.replace(/"cwd":"[^"]*"/g, `"cwd":"${st.workspace}"`));
     return true;
   } finally {
     await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
