@@ -139,7 +139,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     void app.register(fastifyStatic, { root: opts.webDistDir, prefix: '/', wildcard: true });
     app.addHook('onSend', async (req, reply) => {
       if (String(reply.getHeader('content-type') ?? '').includes('text/html')) {
-        void reply.header('cache-control', 'no-store', true);
+        void reply.header('cache-control', 'no-store');
       }
     });
     app.setNotFoundHandler((req, reply) => {
