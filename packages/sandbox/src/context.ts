@@ -125,8 +125,9 @@ export async function writeChannelsConfig(home: string, botName: string, workspa
     clientId: '$DINGTALK_CLIENT_ID',
     clientSecret: '$DINGTALK_CLIENT_SECRET',
     cwd: workspacePath,
-    // 按群路由的会话隔离由 routes.json 承担（§8.2），sessionScope 保持 single
-    sessionScope: 'single',
+    // sessionScope user：per-user 会话且 channel memory 可注入（single 作用域下 memory 不注入不召回，暗号事故）；
+    // 群级隔离仍可由 routes.json 覆盖（push --bot fork 绑定）
+    sessionScope: 'user',
     senderPolicy: 'open',
     groupPolicy: 'open',
     dmPolicy: 'open',
