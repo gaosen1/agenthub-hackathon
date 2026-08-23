@@ -20,7 +20,12 @@ let serveProc: ChildProcess | null = null;
 export function serveArgs(spec: ServeSpec): string[] {
   if (spec.mode === 'bot') {
     // bot 也必须固定端口：runTaskViaServe（ACP）与 shell-proxy 都按 servePort() 寻址
-    return ['serve', '--workspace', spec.workspacePath, '--channel', spec.botName ?? '', '--port', servePort()];
+    const args = ['serve', '--workspace', spec.workspacePath, '--channel', spec.botName ?? '', '--port', servePort()];
+    // Web Shell 同承载 bot 会话：shell 前端的 API/SSE 请求带浏览器 Origin，serve 无白名单会一律拒绝
+    // （iframe 黑屏、无流式输出事故）；qwen serve 要求 '*' 必须配 bearer token，
+    // 无 token 环境（本地裸跑）不追加，避免 serve 拒启动
+    if (spec.serveToken || process.env.QWEN_SERVER_TOKEN) args.push('--allow-origin', process.env.AGENTHUB_WEB_ORIGIN ?? '*');
+    return args;
   }
   // --allow-origin '*'：web-shell iframe 的文档源随后端变化（Aone 网关每沙箱子域 / port-forward 127.0.0.1），
   // 无法枚举 hub 源；qwen serve 要求 '*' 必须配 bearer token（QWEN_SERVER_TOKEN 已注入），网关 URL 本身即密钥

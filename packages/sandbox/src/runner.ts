@@ -149,7 +149,7 @@ function startAutoBinder(pushedSessionId: string | undefined, workspacePath: str
         // 写路由后必须重启 serve，daemon 才能在启动时 lazy-reload routes.json
         await stopServe();
         await rewriteRoute(home, dHash, botName, chatId, sessionId, workspacePath);
-        await startServe({ mode: 'bot', workspacePath, botName });
+        await startServe({ mode: 'bot', workspacePath, botName, serveToken });
         await waitServeReady('bot');
         appendLog('ok', `auto-bind: chat ${chatId} -> session ${sessionId.slice(0, 8)} (serve restarted)`);
       }
@@ -270,7 +270,7 @@ export function buildRunner(): FastifyInstance {
             appendLog('ok', `explicit bind chat ${body.bindChatId} -> session ${manifest.sessionId.slice(0, 8)}`);
           }
           // serve 先起：钉钉流与 Web Shell 立即可用；task 走 serve ACP 流式执行，外部端可实时观看
-          await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName });
+          await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName, serveToken });
           await waitServeReady('bot');
           state.serveReady = true;
           appendLog('ok', 'bot serve ready (dingtalk stream connected on qwen side)');
@@ -278,7 +278,7 @@ export function buildRunner(): FastifyInstance {
           if (body.task) {
             let code: number;
             try {
-              code = await runTaskViaServe(manifest.workspacePath, manifest.sessionId, body.task);
+              code = await runTaskViaServe(manifest.workspacePath, manifest.sessionId, body.task, serveToken);
             } catch (e) {
               appendLog('sys', `serve task path unavailable (${e instanceof Error ? e.message : String(e)}); fallback headless`);
               code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
@@ -431,7 +431,7 @@ export function buildRunner(): FastifyInstance {
     await stopServe();
     // 路由必须写到 daemon 自己的 hash 目录（SHA256[:16]），写 manifest.wsHash 目录 daemon 不读
     await rewriteRoute(qwenHome(), daemonWsHash(cwd), botName, body.chatId, sessionId, cwd);
-    await startServe({ mode: 'bot', workspacePath: cwd, botName });
+    await startServe({ mode: 'bot', workspacePath: cwd, botName, serveToken });
     await waitServeReady('bot');
     appendLog('ok', `rebound chat ${body.chatId} -> session ${sessionId}`);
     return reply.send({ ok: true, sessionId });
