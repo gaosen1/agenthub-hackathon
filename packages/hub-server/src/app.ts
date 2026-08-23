@@ -729,7 +729,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       try {
         await provisionBot(id);
       } catch (e) {
-        db.prepare("UPDATE bots SET status='error' WHERE id=?").run(id);
+        db.prepare("UPDATE bots SET status='error' WHERE id=? AND status != 'deleted'").run(id);
         const m = e instanceof Error ? e.message : String(e);
         const slug = body.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'bot';
         recordSandboxReclaim(db, `ah-bot-${id}-${slug}`, 'failed', 'pod-failed', m);
@@ -791,7 +791,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       const answer = ((await pr.json()) as { answer?: string }).answer ?? '';
       await reply(answer ? answer.slice(0, 5000) : '（空回复）');
     } catch (e) {
-      db.prepare("UPDATE bots SET status='error' WHERE id=?").run(b.id);
+      db.prepare("UPDATE bots SET status='error' WHERE id=? AND status != 'deleted'").run(b.id);
       await reply(`唤醒失败：${e instanceof Error ? e.message : String(e)}`);
     }
   };
