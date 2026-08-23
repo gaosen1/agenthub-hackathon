@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from './app.js';
+import { Worker } from './worker.js';
 import { openDb, type DB } from './db.js';
 import type { OssSigner } from './oss.js';
 import type { PodOrchestrator, PodPhase, SandboxPodSpec } from './k8s.js';
@@ -68,15 +69,17 @@ describe('bots API', () => {
   beforeEach(async () => {
     db = openDb(':memory:');
     orch = new FakeOrchestrator();
+    const conn = { getBaseUrl: async () => 'http://127.0.0.1:1', dispose: async () => undefined, invalidate: () => undefined, browserReachable: () => true };
     app = buildApp({
       db,
       signer: fakeSigner,
       secret: 'test-secret',
       sandbox: {
         orchestrator: orch,
-        connector: { getBaseUrl: async () => 'http://127.0.0.1:1', dispose: async () => undefined },
+        connector: conn,
         namespace: 'agenthub',
         image: 'test/sandbox:itest',
+        worker: new Worker(db, orch, conn, fakeSigner, { namespace: 'agenthub', image: 'test/sandbox:itest' }, 'test-secret'),
       },
     });
     const res = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { username: 'alice', password: 'secret123' } });
@@ -217,15 +220,17 @@ describe('GET /api/sandboxes（S9）', () => {
   beforeEach(async () => {
     db = openDb(':memory:');
     orch = new FakeOrchestrator();
+    const conn = { getBaseUrl: async () => 'http://127.0.0.1:1', dispose: async () => undefined, invalidate: () => undefined, browserReachable: () => true };
     app = buildApp({
       db,
       signer: fakeSigner,
       secret: 'test-secret',
       sandbox: {
         orchestrator: orch,
-        connector: { getBaseUrl: async () => 'http://127.0.0.1:1', dispose: async () => undefined },
+        connector: conn,
         namespace: 'agenthub',
         image: 'test/sandbox:itest',
+        worker: new Worker(db, orch, conn, fakeSigner, { namespace: 'agenthub', image: 'test/sandbox:itest' }, 'test-secret'),
       },
     });
     const a = await app.inject({ method: 'POST', url: '/api/auth/register', payload: { username: 'alice', password: 'secret123' } });
