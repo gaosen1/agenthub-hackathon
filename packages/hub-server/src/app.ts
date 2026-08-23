@@ -717,7 +717,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     // 外置快照：PUT 7d 有效（覆盖 24h TTL 内的周期回写），GET 随 provision 即用默认 TTL
     const snapEnv: Record<string, string> = {};
     if (asOssClient(signer)?.configured) {
-      const snapKey = `bots/${id}/snapshot.tar.gz`;
+      // key 跟 uid+name slug（不跟行 id）：DELETE+POST 重建后仍能续上旧快照
+      const snapKey = `bots/${uid}/${slug}/snapshot.tar.gz`;
       snapEnv.BOT_SNAPSHOT_PUT_URL = await signer.signPut(snapKey, 7 * 86_400);
       snapEnv.BOT_SNAPSHOT_GET_URL = await signer.signGet(snapKey);
     }
