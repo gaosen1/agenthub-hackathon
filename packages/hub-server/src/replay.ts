@@ -105,10 +105,25 @@ function ensure(): Promise<ReplayState> {
   return starting;
 }
 
-/** 从 OSS 返回包还原 session jsonl 到 replay serve 的 projects 分片目录；已存在则跳过 */
-async function restoreSession(st: ReplayState, sessionId: string, signGet: (key: string) => Promise<string>, outputOssKey: string | null): Promise<void> {
+/** 还原新 session 后重启 serve：daemon 启动时 lazy-reload routes.json，运行中不扫盘 */
+async function restart(): Promise<void> {
+  const st = state;
+  if (!st) return;
+  state = undefined;
+  const exited = new Promise<void>((r) => {
+    if (st.serve.exitCode !== null) return r();
+    st.serve.once('exit', () => r());
+    setTimeout(r, 5_000);
+  });
+  st.serve.kill();
+  await exited;
+  await new Promise<void>((r) => st.proxy.close(() => r()));
+}
+
+/** 从 OSS 返回包还原 session jsonl 到 replay serve 的 projects 分片目录；返回是否新还原（已存在则 false） */
+async function restoreSession(st: ReplayState, sessionId: string, signGet: (key: string) => Promise<string>, outputOssKey: string | null): Promise<boolean> {
   const dest = join(st.home, 'projects', wsHash(st.workspace), 'chats', `${sessionId}.jsonl`);
-  if (existsSync(dest)) return;
+  if (existsSync(dest)) return false;
   if (!outputOssKey) throw new Error('handoff has no output package');
   const url = await signGet(outputOssKey);
   const pkg = join(tmpdir(), `agenthub-replay-${sessionId}.tar.gz`);
@@ -133,6 +148,7 @@ async function restoreSession(st: ReplayState, sessionId: string, signGet: (key:
     if (!found) throw new Error(`session ${sessionId} not found in output package`);
     await fs.mkdir(dirname(dest), { recursive: true });
     await fs.copyFile(found, dest);
+    return true;
   } finally {
     await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
     await fs.rm(pkg, { force: true }).catch(() => undefined);
@@ -152,7 +168,9 @@ export async function replayShellUrl(
   const home = replayHome();
   const dest = join(home, 'projects', wsHash(workspace), 'chats', `${h.session_id}.jsonl`);
   if (!existsSync(dest) && !h.output_oss_key) throw new Error('handoff has no output package');
-  const st = await ensure();
-  await restoreSession(st, h.session_id, signGet, h.output_oss_key);
+  const st0 = await ensure();
+  const restored = await restoreSession(st0, h.session_id, signGet, h.output_oss_key);
+  // 新还原的 session 需重启 serve 才能进 routes（daemon 启动时 lazy-reload）
+  const st = restored ? ((await restart()), await ensure()) : st0;
   return `http://127.0.0.1:${REPLAY_PROXY_PORT}/session/${encodeURIComponent(h.session_id)}#token=${st.token}`;
 }
