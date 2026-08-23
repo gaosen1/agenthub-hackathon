@@ -11,7 +11,7 @@ import { execFile as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, computeLockHash, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
 import { allLogs, appendLog, logsAfter, state } from './state.js';
-import { runTask, runTaskViaServe, startServe, stopServe, waitServeReady } from './qwen.js';
+import { runTask, runTaskViaServe, newSessionViaServe, startServe, stopServe, waitServeReady } from './qwen.js';
 import { startShellProxy } from './shell-proxy.js';
 import { ensureIde, ideStatus } from './ide.js';
 import { notifyGroups } from './dingtalk.js';
@@ -106,18 +106,19 @@ async function forkSessionFile(src: string, dest: string, forkedId: string): Pro
 }
 
 /**
- * 自动绑定监听器：bot 模式下 /load 完成后启动，
- * 轮询 daemon 的 observed-contacts.json，发现新 chatId 时自动 fork session 并写路由。
- * 每个群从同一份 pushed session 开始，但各自独立演进（perChat 隔离）。
+ * 自动绑定监听器：bot 模式下轮询 daemon 的 observed-contacts.json，发现新 chatId 时写路由。
+ * 有 pushed session（push --bot）→ 每群 fork 同一份历史各自演进；
+ * 裸 bot（无 /load）→ 每群 ACP 新建 session。绑定后重启 serve 使 routes 生效。
  */
 let autoBinderTimer: ReturnType<typeof setInterval> | undefined;
-function startAutoBinder(pushedSessionId: string, workspacePath: string, botName: string): void {
+function startAutoBinder(pushedSessionId: string | undefined, workspacePath: string, botName: string): void {
+  if (autoBinderTimer) clearInterval(autoBinderTimer);
   const dHash = daemonWsHash(workspacePath);
   const home = qwenHome();
   const boundChatIds = new Set<string>();
 
   autoBinderTimer = setInterval(async () => {
-    if (!manifest || state.mode !== 'bot') {
+    if (state.mode !== 'bot') {
       if (autoBinderTimer) clearInterval(autoBinderTimer);
       return;
     }
@@ -126,30 +127,37 @@ function startAutoBinder(pushedSessionId: string, workspacePath: string, botName
       for (const chat of chats) {
         const chatId = chat.chatId;
         if (boundChatIds.has(chatId)) continue;
-        // 跳过 push 时已绑定的 chatId（如果有的话）
         boundChatIds.add(chatId);
 
-        // fork session：复制 pushed session 到新文件
-        const srcSession = join(home, 'projects', manifest.wsHash, 'chats', `${pushedSessionId}.jsonl`);
-        if (!existsSync(srcSession)) continue;
-
-        const forkedId = randomUUID();
-        const forkPath = join(home, 'projects', manifest.wsHash, 'chats', `${forkedId}.jsonl`);
-        await forkSessionFile(srcSession, forkPath, forkedId);
+        let sessionId: string;
+        if (pushedSessionId && manifest) {
+          // fork session：复制 pushed session 到新文件
+          const srcSession = join(home, 'projects', manifest.wsHash, 'chats', `${pushedSessionId}.jsonl`);
+          if (!existsSync(srcSession)) {
+            boundChatIds.delete(chatId);
+            continue;
+          }
+          const forkedId = randomUUID();
+          const forkPath = join(home, 'projects', manifest.wsHash, 'chats', `${forkedId}.jsonl`);
+          await forkSessionFile(srcSession, forkPath, forkedId);
+          sessionId = forkedId;
+        } else {
+          sessionId = await newSessionViaServe(workspacePath);
+        }
 
         // 写路由后必须重启 serve，daemon 才能在启动时 lazy-reload routes.json
         await stopServe();
-        await rewriteRoute(home, dHash, botName, chatId, forkedId, workspacePath);
+        await rewriteRoute(home, dHash, botName, chatId, sessionId, workspacePath);
         await startServe({ mode: 'bot', workspacePath, botName });
         await waitServeReady('bot');
-        appendLog('ok', `auto-bind: chat ${chatId} -> forked session ${forkedId} (serve restarted)`);
+        appendLog('ok', `auto-bind: chat ${chatId} -> session ${sessionId.slice(0, 8)} (serve restarted)`);
       }
     } catch {
       // 轮询失败，下次重试
     }
   }, 3000);
   autoBinderTimer.unref();
-  appendLog('sys', `auto-binder started (pushed session ${pushedSessionId}, wsHash=${dHash})`);
+  appendLog('sys', `auto-binder started (pushed=${pushedSessionId ?? 'none'}, wsHash=${dHash})`);
 }
 
 const exec = promisify(execCb);
@@ -478,6 +486,8 @@ if (process.env.VITEST === undefined) {
             };
             snap();
             setInterval(snap, 240_000);
+            // 裸 bot 也要自动绑路由：新聊天 ACP 新建 session；push --bot 的 /load 会替换为 fork 模式 binder
+            startAutoBinder(undefined, workspacePath, botName);
           } catch (e) {
             state.lastError = e instanceof Error ? e.message : String(e);
             appendLog('err', `bot auto-start failed: ${state.lastError}`);

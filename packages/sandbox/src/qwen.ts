@@ -55,6 +55,97 @@ export async function startServe(spec: ServeSpec): Promise<void> {
   serveProc.on('exit', (code) => appendLog('sys', `qwen serve exited (${code})`));
 }
 
+/** 裸 bot：为新聊天新建 ACP session（initialize + session/new）；应答帧可能走 SSE，同 runTaskViaServe 的 settle 模式 */
+export async function newSessionViaServe(cwd: string): Promise<string> {
+  const base = `http://127.0.0.1:${servePort()}`;
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  let rpcId = 0;
+  const pending = new Map<number, (m: Record<string, unknown>) => void>();
+  const resolved = new Map<number, Record<string, unknown>>();
+  const settle = (m: Record<string, unknown>): void => {
+    const cb = pending.get(m.id as number);
+    if (cb) {
+      pending.delete(m.id as number);
+      cb(m);
+    } else {
+      resolved.set(m.id as number, m);
+    }
+  };
+  const post = async (method: string, params: unknown): Promise<number> => {
+    const id = ++rpcId;
+    const r = await fetch(`${base}/acp`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
+    const cid = r.headers.get('acp-connection-id');
+    if (cid) headers['acp-connection-id'] = cid;
+    if (r.status >= 400) throw new Error(`ACP ${method} → ${r.status}`);
+    try {
+      const m = JSON.parse(await r.text()) as Record<string, unknown>;
+      if (m.id !== undefined && (m.result !== undefined || m.error !== undefined)) settle(m);
+    } catch {
+      // 应答帧走 SSE
+    }
+    return id;
+  };
+  const wait = (id: number, ms: number): Promise<Record<string, unknown>> => {
+    const hit = resolved.get(id);
+    if (hit) {
+      resolved.delete(id);
+      return Promise.resolve(hit);
+    }
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`ACP 应答超时（#${id}）`));
+      }, ms);
+      pending.set(id, (m) => {
+        clearTimeout(t);
+        resolve(m);
+      });
+    });
+  };
+  const ac = new AbortController();
+  const sse = (async () => {
+    const r = await fetch(`${base}/acp`, { headers: { accept: 'text/event-stream', ...headers }, signal: ac.signal });
+    if (!r.ok || !r.body) return;
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const data = frame
+          .split('\n')
+          .filter((l) => l.startsWith('data:'))
+          .map((l) => l.slice(5).trim())
+          .join('');
+        if (!data) continue;
+        try {
+          const m = JSON.parse(data) as Record<string, unknown>;
+          if (m.id !== undefined && (m.result !== undefined || m.error !== undefined)) settle(m);
+        } catch {
+          continue;
+        }
+      }
+    }
+  })().catch(() => undefined);
+  try {
+    const initId = await post('initialize', { protocolVersion: 1 });
+    await wait(initId, 15_000);
+    const newId = await post('session/new', { cwd, mcpServers: [] });
+    const resp = await wait(newId, 30_000);
+    const sid = (resp.result as { sessionId?: string } | undefined)?.sessionId;
+    if (resp.error || !sid) throw new Error('session/new 失败');
+    return sid;
+  } finally {
+    ac.abort();
+    void sse;
+  }
+}
+
 export async function stopServe(): Promise<void> {
   const proc = serveProc;
   serveProc = null;
