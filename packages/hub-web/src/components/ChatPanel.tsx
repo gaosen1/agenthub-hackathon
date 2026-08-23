@@ -2,8 +2,8 @@
  * 云端会话面板：
  * - running：qwen-code 原生 Web Shell 完全承载（iframe；serve 以 --allow-origin 启动，
  *   shell 可合法被 iframe；流式输出/模式切换/session 重放均由 shell 原生提供）；
- * - 终态（done/failed/…）：serve 已随任务结束停止，shell 不复存在——回退只读历史回放：
- *   hub 事件流里的 task 指令 + runner [task] relay 日志渲染成卡片，
+ * - 终态（done/failed/…）：沙箱已销毁——优先本地 replay serve 还原 session 继续用原生 web shell 回放；
+ *   无返回包/还原失败时回退只读历史回放：hub 事件流里的 task 指令 + runner [task] relay 日志渲染成卡片，
  *   并支持同 session 历次 handoff 逐块向上加载。不摆假数据，无记录时诚实说明。
  */
 import { useEffect, useMemo, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
@@ -153,10 +153,9 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
     }
   }, [chatW]);
 
-  // running 且 status 变化时取 shell 入口；终态不请求（serve 已停，入口必 409）
-  // web/bot 双载体均可：bot 流程 serve 先起，task 走 ACP 流式，侧栏实时可见
+  // status 变化即取 shell 入口：running 走沙箱网关；终态走本地 replay serve（后端还原 session）；
+  // queued 等非终态非 running 状态后端 409，err 占位即可
   useEffect(() => {
-    if (!isRunning) return;
     let alive = true;
     setShell(null);
     setErr('');
@@ -216,24 +215,22 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
       <div className="chat-h">
         <div className="t">
           <i className="fa-solid fa-comments" /> 云端会话
-          <span className="via">{isRunning ? 'qwen-code Web Shell' : '历史回放（只读）'}</span>
+          <span className="via">{shell?.reachable ? (isRunning ? 'qwen-code Web Shell' : 'qwen-code Web Shell · 会话回放') : isRunning ? 'qwen-code Web Shell' : '历史回放（只读）'}</span>
         </div>
         <div className="sess">
           <i className="fa-regular fa-file-lines" /> {detail.sessionId}.jsonl
         </div>
       </div>
-      {isRunning ? (
-        shell?.reachable ? (
-          <iframe className="shell-frame" src={shell.url} title="Qwen Code Web Shell" />
-        ) : (
-          <div className="shell-empty">
-            {err
-              ? `云端会话不可用：${err}`
-              : shell
-                ? 'Web Shell 不可直达：需 hub 与浏览器同机（port-forward），或 hub 部署在集群内'
-                : '正在连接云端会话…'}
-          </div>
-        )
+      {shell?.reachable ? (
+        <iframe className="shell-frame" src={shell.url} title="Qwen Code Web Shell" />
+      ) : isRunning ? (
+        <div className="shell-empty">
+          {err
+            ? `云端会话不可用：${err}`
+            : shell
+              ? 'Web Shell 不可直达：需 hub 与浏览器同机（port-forward），或 hub 部署在集群内'
+              : '正在连接云端会话…'}
+        </div>
       ) : (
         <HistoryView detail={detail} />
       )}
