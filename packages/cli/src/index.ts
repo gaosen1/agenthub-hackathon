@@ -52,7 +52,7 @@ program
   .option('--session <id>', '指定 session（缺省取最近活跃）')
   .option('--task <指令>', '接力指令；缺省为交互接力（云端挂起等对话）')
   .option('--no-include-untracked', '快照不含未跟踪文件（缺省含，遵循 .gitignore）')
-  .option('--bot <name>', '推到常驻钉钉机器人 sandbox')
+  .option('--bot [name]', '推到常驻钉钉机器人 sandbox；省略值时用你唯一的 bot')
   .option('--chat <chatId>', '绑定到指定钉钉群（配合 --bot）')
   .option('--timeout <min>', '任务接力硬超时分钟数', '30')
   .action(async (opts) => {
