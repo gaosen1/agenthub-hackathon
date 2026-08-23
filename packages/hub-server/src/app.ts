@@ -31,6 +31,8 @@ import { hashPassword, signJwt, verifyJwt, verifyPassword } from './auth.js';
 import { ossKeyOf, assertOwnedKey, userPrefix, asOssClient, depsCacheKeyOf, depsSidecarKeyOf, warmBundleKeyOf, warmSidecarKeyOf, SIGNED_URL_TTL_SECONDS, type OssSigner, type OssClient } from './oss.js';
 import { ApiFail, fail } from './state.js';
 import { decryptSecret, encryptSecret } from './crypto.js';
+import { DingtalkStreamWaker, replyViaWebhook, type DingBotMessage } from './dingtalk-stream.js';
+import { runPromptViaServe } from './acp-prompt.js';
 import { getBot, getHandoff, getUserModelConfig, getSettings, nowIso, patchHandoff, recordEvent, recordSandboxCreate, recordSandboxReady, recordSandboxReclaim, setSetting, setHandoffArchived, deleteHandoffRow, setUserModelConfig, setStatus, type BotRow, type HandoffRow, type SandboxRow } from './store.js';
 import { userModelSecret } from './db.js';
 import { RunnerClient, RunnerError } from './runner-client.js';
@@ -701,6 +703,30 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     createdAt: b.created_at,
   });
 
+  /** bot 沙箱 provision：创建路由与唤醒看门人共用；成功落 running 并返回实际实例名 */
+  const provisionBot = async (uid: number, id: number, name: string, clientId: string, clientSecret: string): Promise<string> => {
+    const sb = sandbox;
+    if (!sb) throw new Error('sandbox backend not configured');
+    const slug = name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'bot';
+    const deployName = `ah-bot-${id}-${slug}`;
+    const runnerToken = newToken();
+    // 先落历史行再建 Pod：建不出来的实例也要在面板上看得见（S6）
+    recordSandboxCreate(db, { podName: deployName, userId: uid, kind: 'bot', image: sb.image ?? sandboxImage(), namespace: sb.namespace, botId: id });
+    const modelRefs = await ensureModelSecret(uid);
+    await sb.orchestrator.createSecret(`bot-${id}`, { DINGTALK_CLIENT_ID: clientId, DINGTALK_CLIENT_SECRET: clientSecret });
+    // bot 用 Deployment（非 raw Pod）：ACS 驱逐后自动重建；Aone 后端返回 sandboxId
+    const actualDeploy = await sb.orchestrator.createDeployment({
+      podName: deployName,
+      mode: 'bot',
+      env: { RUNNER_TOKEN: runnerToken, BOT_NAME: name },
+      secretRefs: [...modelRefs, `bot-${id}`],
+      labels: { 'agenthub/kind': 'bot', 'agenthub/owner': String(uid), 'agenthub/bot': String(id) },
+    });
+    db.prepare("UPDATE bots SET pod_name=?, runner_token=?, status='running' WHERE id=?").run(actualDeploy, runnerToken, id);
+    recordSandboxReady(db, actualDeploy);
+    return actualDeploy;
+  };
+
   app.get('/api/bots', async (req, reply) => {
     const { uid } = requireAuth(req);
     const rows = db.prepare("SELECT * FROM bots WHERE user_id=? AND status != 'deleted' ORDER BY id").all(uid) as BotRow[];
@@ -718,38 +744,13 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const id = Number(info.lastInsertRowid);
 
     if (sandbox) {
-      const slug = body.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'bot';
-      const deployName = `ah-bot-${id}-${slug}`;
-      const runnerToken = newToken();
-      // 先落历史行再建 Pod：建不出来的实例也要在面板上看得见（S6）
-      recordSandboxCreate(db, {
-        podName: deployName,
-        userId: uid,
-        kind: 'bot',
-        image: sandbox.image ?? sandboxImage(),
-        namespace: sandbox.namespace,
-        botId: id,
-      });
       try {
-        const modelRefs = await ensureModelSecret(uid);
-        await sandbox.orchestrator.createSecret(`bot-${id}`, {
-          DINGTALK_CLIENT_ID: body.clientId,
-          DINGTALK_CLIENT_SECRET: decryptSecret(encryptSecret(body.clientSecret, secret), secret),
-        });
-        // bot 用 Deployment（非 raw Pod）：ACS 驱逐后自动重建；Aone 后端返回 sandboxId
-        const actualDeploy = await sandbox.orchestrator.createDeployment({
-          podName: deployName,
-          mode: 'bot',
-          env: { RUNNER_TOKEN: runnerToken, BOT_NAME: body.name },
-          secretRefs: [...modelRefs, `bot-${id}`],
-          labels: { 'agenthub/kind': 'bot', 'agenthub/owner': String(uid), 'agenthub/bot': String(id) },
-        });
-        db.prepare("UPDATE bots SET pod_name=?, runner_token=?, status='running' WHERE id=?").run(actualDeploy, runnerToken, id);
-        recordSandboxReady(db, actualDeploy);
+        await provisionBot(uid, id, body.name, body.clientId, body.clientSecret);
       } catch (e) {
         db.prepare("UPDATE bots SET status='error' WHERE id=?").run(id);
         const m = e instanceof Error ? e.message : String(e);
-        recordSandboxReclaim(db, deployName, 'failed', 'pod-failed', m);
+        const slug = body.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'bot';
+        recordSandboxReclaim(db, `ah-bot-${id}-${slug}`, 'failed', 'pod-failed', m);
         throw fail(502, 'ERR_K8S', `bot sandbox create failed: ${m}`);
       }
     }
@@ -772,6 +773,72 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     db.prepare("UPDATE bots SET status='deleted', pod_name=NULL, name=name||'.deleted.'||id WHERE id=?").run(bot.id);
     return reply.status(204).send();
   });
+
+  // ── bot 唤醒看门人：沙箱死/过期时 hub 持兜底 Stream 接 @，唤醒后交棒沙箱原生 Stream ──
+  const wakers = new Map<number, DingtalkStreamWaker>();
+  /** 与 runner BOT_WORKSPACE 默认值一致（ACP session/new 的 cwd） */
+  const BOT_WORKSPACE_DEFAULT = '/tmp/agenthub-runner/bot-workspace';
+  const wakeBot = async (b: BotRow, m: DingBotMessage): Promise<void> => {
+    const reply = (text: string): Promise<void> => replyViaWebhook(m.sessionWebhook, b.name, text);
+    await reply('云端开发机未启动或已过期，正在唤醒，就绪后自动回复（约 30 秒）…');
+    // 先断兜底连接，避免与沙箱原生 Stream 同 clientId 互踢
+    wakers.get(b.id)?.stop();
+    wakers.delete(b.id);
+    try {
+      const sb = sandbox;
+      if (!sb) throw new Error('sandbox backend not configured');
+      const pod = await provisionBot(b.user_id, b.id, b.name, b.client_id, decryptSecret(b.client_secret_enc, secret));
+      const podRef = { namespace: sb.namespace, podName: pod };
+      const runnerBase = await sb.connector.getBaseUrl(podRef, 8080);
+      const deadline = Date.now() + 90_000;
+      for (;;) {
+        const hz = await fetch(`${runnerBase}/healthz`, { signal: AbortSignal.timeout(3000) })
+          .then((r) => r.json() as Promise<{ serveReady?: boolean; mode?: string }>)
+          .catch(() => undefined);
+        if (hz?.serveReady && hz.mode === 'bot') break;
+        if (Date.now() > deadline) throw new Error('bot serve not ready within 90s');
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      const serveBase = await sb.connector.getBaseUrl(podRef, 8081);
+      const answer = await runPromptViaServe(serveBase, BOT_WORKSPACE_DEFAULT, m.text || '你好');
+      await reply(answer ? answer.slice(0, 5000) : '（空回复）');
+    } catch (e) {
+      db.prepare("UPDATE bots SET status='error' WHERE id=?").run(b.id);
+      await reply(`唤醒失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+  const botPatrolTick = async (): Promise<void> => {
+    const sb = sandbox;
+    if (!sb) return;
+    const rows = db.prepare("SELECT * FROM bots WHERE status IN ('running','error')").all() as BotRow[];
+    for (const b of rows) {
+      const alive = b.pod_name ? (await sb.orchestrator.getPodPhase(b.pod_name).catch(() => 'failed')) === 'ready' : false;
+      const w = wakers.get(b.id);
+      if (alive && w) {
+        // 沙箱复活：交棒原生 Stream，撤兜底
+        w.stop();
+        wakers.delete(b.id);
+        continue;
+      }
+      if (!alive && !w && b.status === 'running') {
+        const wk = new DingtalkStreamWaker(
+          b.client_id,
+          decryptSecret(b.client_secret_enc, secret),
+          (m) => void wakeBot(b, m),
+          (s) => console.error(`[waker:bot${b.id}]`, s),
+        );
+        wakers.set(b.id, wk);
+        wk.start()
+          .then(() => console.error(`[waker:bot${b.id}] fallback stream connected`))
+          .catch((e) => {
+            wakers.delete(b.id);
+            console.error(`[waker:bot${b.id}] start failed:`, e instanceof Error ? e.message : e);
+          });
+      }
+    }
+  };
+  setInterval(() => void botPatrolTick(), 60_000);
+  void botPatrolTick();
 
   // ── Sandbox 面板（S9）：历史行 + 模板 + 真实策略，恒带 WHERE user_id ──
   app.get('/api/sandboxes', async (req) => {
