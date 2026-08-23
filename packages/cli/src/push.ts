@@ -21,7 +21,7 @@ export interface PushOptions {
   session?: string;
   task?: string;
   includeUntracked?: boolean;
-  bot?: string;
+  bot?: string | boolean;
   chat?: string;
   timeout?: string;
 }
@@ -42,12 +42,21 @@ export async function runPush(opts: PushOptions): Promise<void> {
   const sessPath = sessionPath(workspacePath, sessionId);
   if (!existsSync(sessPath)) throw new Error(`session 文件不存在: ${sessPath}`);
 
-  // 1. 创建 handoff 拿 id + 上传签名 URL（--bot 传名字，先解析为 botId）
+  // 1. 创建 handoff 拿 id + 上传签名 URL（--bot 可省值：省略时用唯一活跃 bot）
   let botId: number | undefined;
   if (opts.bot) {
     const { items } = await client.listBots();
-    const bot = items.find((b) => b.name === opts.bot && b.status !== 'deleted');
-    if (!bot) throw new Error(`机器人 "${opts.bot}" 不存在，先在 Web 面板创建（现有: ${items.map((b) => b.name).join(', ') || '无'}）`);
+    let bot;
+    if (opts.bot === true) {
+      const active = items.filter((b) => b.status !== 'deleted');
+      if (active.length !== 1) {
+        throw new Error(`省略 --bot 值要求恰好一个 bot（现有: ${active.map((b) => b.name).join(', ') || '无'}），请用 --bot <name> 指定`);
+      }
+      bot = active[0];
+    } else {
+      bot = items.find((b) => b.name === opts.bot && b.status !== 'deleted');
+      if (!bot) throw new Error(`机器人 "${opts.bot}" 不存在，先在 Web 面板创建（现有: ${items.map((b) => b.name).join(', ') || '无'}）`);
+    }
     botId = bot.id;
   }
   const req: CreateHandoffReq = {
