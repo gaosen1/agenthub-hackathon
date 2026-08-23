@@ -21,14 +21,25 @@ function fakeSdk() {
     close: async () => undefined,
   });
   const sdk: AoneSdkLike = {
-    create: async (opts) => {
-      created.push(opts);
-      return make(`sb-${created.length}`);
+    Sandbox: {
+      create: async (opts) => {
+        created.push(opts);
+        return make(`sb-${created.length}`);
+      },
+      connect: async (opts) => {
+        const id = String((opts as { sandboxId?: string }).sandboxId ?? '');
+        if (!created.some((_, i) => `sb-${i + 1}` === id)) throw new Error(`sandbox ${id} not found`);
+        return make(id);
+      },
     },
-    connect: async (opts) => {
-      const id = String((opts as { sandboxId?: string }).sandboxId ?? '');
-      if (!created.some((_, i) => `sb-${i + 1}` === id)) throw new Error(`sandbox ${id} not found`);
-      return make(id);
+    SandboxManager: {
+      create: async () => ({
+        getSandboxInfo: async (id: string) => {
+          if (!created.some((_, i) => `sb-${i + 1}` === id)) throw new Error('not found');
+          return { status: { state: states.get(id) ?? 'Running' } };
+        },
+        close: async () => undefined,
+      }),
     },
   };
   return { sdk, created, killed, states };
@@ -89,7 +100,7 @@ describe('AoneConnector', () => {
     const id = await orch.createPod(spec);
     const conn = new AoneConnector(orch);
     expect(await conn.getBaseUrl({ namespace: 'aone', podName: id }, 8080)).toBe(
-      `https://${id}-p8080.sandbox.aone.alibaba-inc.com`,
+      `https://${id}-p8082.sandbox.aone.alibaba-inc.com/__runner`,
     );
   });
 });

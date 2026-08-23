@@ -103,11 +103,13 @@ describe('Web Shell 入口', () => {
     db.prepare('UPDATE handoffs SET pod_name=? WHERE id=?').run('ah-web-sh1', 'hf-sh1');
     const ok = await app.inject({ method: 'GET', url: '/api/handoffs/hf-sh1/shell-url', headers: auth() });
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toEqual({ url: `http://127.0.0.1:${shellPort}`, reachable: true });
+    expect(ok.json()).toEqual({ url: `http://127.0.0.1:${shellPort}/session/s`, reachable: true });
 
     insertHandoff('hf-sh2', 'done');
+    // 终态走 replay：无返回包时回退 reachable:false（前端回退 HistoryView），不再 409
     const bad = await app.inject({ method: 'GET', url: '/api/handoffs/hf-sh2/shell-url', headers: auth() });
-    expect(bad.statusCode).toBe(409);
+    expect(bad.statusCode).toBe(200);
+    expect(bad.json()).toEqual({ url: '', reachable: false });
     shellSrv.close();
   });
 });
