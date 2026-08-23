@@ -26,6 +26,11 @@ export function useHandoffDetail(id: string | null) {
 /** 真 Hub 的状态时间线 + 日志事件流（mock 模式返回空，组件回退 mockExtras） */
 const eventCursors = new Map<string, { after: number; items: HandoffEventsResp['items'] }>();
 
+/** 测试钩子：清空增量游标，避免同 id 用例间串数据 */
+export function clearEventCursors(): void {
+  eventCursors.clear();
+}
+
 export function useHandoffEvents(id: string | null, enabled: boolean) {
   return useQuery<HandoffEventsResp>({
     queryKey: ['handoff-events', id],
