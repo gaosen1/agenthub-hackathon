@@ -54,8 +54,14 @@ export function verifyIdeToken(
 function upstreamHeaders(headers: IncomingHttpHeaders, upstreamHost: string, keepAuthorization = false): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(headers)) {
-    if (v === undefined || SKIP_REQ_HEADERS.has(k.toLowerCase())) continue;
-    if (!keepAuthorization && k.toLowerCase() === 'authorization') continue;
+    if (v === undefined) continue;
+    const lk = k.toLowerCase();
+    // keepAuthorization 必须先于 SKIP 集判断（SKIP 含 authorization，否则是死代码）
+    if (lk === 'authorization') {
+      if (keepAuthorization) out[k] = Array.isArray(v) ? v.join(', ') : v;
+      continue;
+    }
+    if (SKIP_REQ_HEADERS.has(lk)) continue;
     out[k] = Array.isArray(v) ? v.join(', ') : v;
   }
   out['host'] = upstreamHost;
