@@ -6,7 +6,7 @@
  * 端口/目录均可 env 覆盖；全部懒启动，无返回包（老任务）时上层回退 HistoryView。
  */
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { promises as fs } from 'node:fs';
@@ -21,9 +21,9 @@ const QWEN_BIN = process.env.QWEN_BIN ?? 'qwen';
 const REPLAY_PORT = Number(process.env.AGENTHUB_REPLAY_PORT ?? 4182);
 const REPLAY_PROXY_PORT = Number(process.env.AGENTHUB_REPLAY_PROXY_PORT ?? 4183);
 
-/** qwen serve daemon 用 SHA256(workspacePath) 前 16 位作 projects 分片目录（与 runner 同算法） */
-function wsHash(workspacePath: string): string {
-  return createHash('sha256').update(resolve(workspacePath)).digest('hex').slice(0, 16);
+/** 真 qwen 的 projects 分片目录 = 绝对路径的 dash-slug（/Users/x → -Users-x）；hash 方案是臆想，daemon 不认 */
+function wsSlug(workspacePath: string): string {
+  return resolve(workspacePath).replace(/\//g, '-');
 }
 
 function baseDir(): string {
@@ -56,6 +56,7 @@ let starting: Promise<ReplayState> | undefined;
 async function start(): Promise<ReplayState> {
   const workspace = join(baseDir(), 'workspace');
   const home = replayHome();
+  await ensureProxy();
   await fs.mkdir(workspace, { recursive: true });
   await fs.mkdir(home, { recursive: true });
   const token = randomBytes(24).toString('hex');
@@ -90,19 +91,34 @@ async function start(): Promise<ReplayState> {
     }
   }
 
-  // 根路径透明代理（web-shell API 走根绝对路径，不能挂子前缀）：仅剥 CSP 类响应头
-  const proxy = createServer((req, res) => {
-    req.on('error', () => res.destroy());
-    pipeHttp(req, res, `http://127.0.0.1:${REPLAY_PORT}`, req.url ?? '/', '', PIPE_OPTS);
-  });
-  proxy.on('connection', (socket) => socket.on('error', () => socket.destroy()));
-  await new Promise<void>((resolveListen, reject) => {
-    proxy.once('error', reject);
-    proxy.listen(REPLAY_PROXY_PORT, '127.0.0.1', () => resolveListen());
-  });
-
-  state = { serve, proxy, token, workspace, home };
+  state = { serve, proxy: proxySingleton(), token, workspace, home };
   return state;
+}
+
+/** 根路径透明代理（web-shell API 走根绝对路径，不能挂子前缀）：仅剥 CSP 类响应头；单例随 hub 进程，serve 重启不重建 */
+let proxyServer: Server | undefined;
+let proxyStarting: Promise<Server> | undefined;
+function proxySingleton(): Server {
+  if (proxyServer) return proxyServer;
+  throw new Error('replay proxy not started');
+}
+async function ensureProxy(): Promise<void> {
+  if (proxyServer) return;
+  proxyStarting ??= new Promise<Server>((resolveListen, reject) => {
+    const srv = createServer((req, res) => {
+      req.on('error', () => res.destroy());
+      pipeHttp(req, res, `http://127.0.0.1:${REPLAY_PORT}`, req.url ?? '/', '', PIPE_OPTS);
+    });
+    srv.on('connection', (socket) => socket.on('error', () => socket.destroy()));
+    srv.once('error', reject);
+    srv.listen(REPLAY_PROXY_PORT, '127.0.0.1', () => resolveListen(srv));
+  }).then((srv) => {
+    proxyServer = srv;
+    return srv;
+  }).finally(() => {
+    proxyStarting = undefined;
+  });
+  await proxyStarting;
 }
 
 function ensure(): Promise<ReplayState> {
@@ -126,12 +142,11 @@ async function restart(): Promise<void> {
   });
   st.serve.kill();
   await exited;
-  await new Promise<void>((r) => st.proxy.close(() => r()));
 }
 
 /** 从 OSS 返回包还原 session jsonl 到 replay serve 的 projects 分片目录；返回是否新还原（已存在则 false） */
 async function restoreSession(st: ReplayState, sessionId: string, signGet: (key: string) => Promise<string>, outputOssKey: string | null): Promise<boolean> {
-  const dest = join(st.home, 'projects', wsHash(st.workspace), 'chats', `${sessionId}.jsonl`);
+  const dest = join(st.home, 'projects', wsSlug(st.workspace), 'chats', `${sessionId}.jsonl`);
   if (existsSync(dest)) return false;
   if (!outputOssKey) throw new Error('handoff has no output package');
   const url = await signGet(outputOssKey);
@@ -175,7 +190,7 @@ export async function replayShellUrl(
   // 先判断包/文件存在性再起进程：无包任务不白起本地 serve
   const workspace = join(baseDir(), 'workspace');
   const home = replayHome();
-  const dest = join(home, 'projects', wsHash(workspace), 'chats', `${h.session_id}.jsonl`);
+  const dest = join(home, 'projects', wsSlug(workspace), 'chats', `${h.session_id}.jsonl`);
   if (!existsSync(dest) && !h.output_oss_key) throw new Error('handoff has no output package');
   const st0 = await ensure();
   const restored = await restoreSession(st0, h.session_id, signGet, h.output_oss_key);
