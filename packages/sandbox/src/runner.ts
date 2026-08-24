@@ -291,9 +291,20 @@ export function buildRunner(): FastifyInstance {
           } catch {
             appendLog('sys', 'routes after /load rebind: (none)');
           }
-          // serve 先起：钉钉流与 Web Shell 立即可用；task 走 serve ACP 流式执行，外部端可实时观看
-          await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName, serveToken });
-          await waitServeReady('bot');
+          // serve 先起：钉钉流与 Web Shell 立即可用；task 走 serve ACP 流式执行，外部端可实时观看。
+          // 重试容忍：旧 serve 的钉钉 stream 释放有竞态（同 clientId 互踢），channel worker 可能
+          // 首启退出（hf-aa7245 事故：task 未跑、群消息丢）；退避重试 3 次。
+          for (let attempt = 1; ; attempt++) {
+            try {
+              await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName, serveToken });
+              await waitServeReady('bot');
+              break;
+            } catch (e) {
+              if (attempt >= 3) throw e;
+              appendLog('sys', `serve start attempt ${attempt} failed (${e instanceof Error ? e.message : String(e)}); retry in 3s (dingtalk stream release grace)`);
+              await new Promise((r) => setTimeout(r, 3000));
+            }
+          }
           state.serveReady = true;
           state.lastError = undefined; // 裸启动等历史错误不污染本次 handoff
           appendLog('ok', 'bot serve ready (dingtalk stream connected on qwen side)');
