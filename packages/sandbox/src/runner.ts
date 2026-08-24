@@ -143,7 +143,7 @@ function startAutoBinder(pushedSessionId: string | undefined, workspacePath: str
           await forkSessionFile(srcSession, forkPath, forkedId);
           sessionId = forkedId;
         } else {
-          sessionId = await newSessionViaServe(workspacePath);
+          sessionId = await newSessionViaServe(workspacePath, serveToken);
         }
 
         // 写路由后必须重启 serve，daemon 才能在启动时 lazy-reload routes.json
@@ -194,7 +194,7 @@ export function buildRunner(): FastifyInstance {
   app.post('/acp-prompt', async (req) => {
     const body = (req.body ?? {}) as { question?: string; cwd?: string };
     const ws = body.cwd ?? state.workspacePath ?? botWorkspace?.workspacePath ?? join(WORK_ROOT, 'bot-workspace');
-    const answer = await runPromptCollect(ws, body.question ?? '');
+    const answer = await runPromptCollect(ws, body.question ?? '', 5 * 60_000, serveToken);
     return { answer };
   });
 

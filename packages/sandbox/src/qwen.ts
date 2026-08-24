@@ -60,10 +60,12 @@ export async function startServe(spec: ServeSpec): Promise<void> {
   serveProc.on('exit', (code) => appendLog('sys', `qwen serve exited (${code})`));
 }
 
-/** 裸 bot：为新聊天新建 ACP session（initialize + session/new）；应答帧可能走 SSE，同 runTaskViaServe 的 settle 模式 */
-export async function newSessionViaServe(cwd: string): Promise<string> {
+/** 裸 bot：为新聊天新建 ACP session（initialize + session/new）；应答帧可能走 SSE，同 runTaskViaServe 的 settle 模式。
+ * serve 带 bearer token 时 loopback 也需鉴权（API 路由受 token 门禁），故透传 serveToken。 */
+export async function newSessionViaServe(cwd: string, serveToken?: string): Promise<string> {
   const base = `http://127.0.0.1:${servePort()}`;
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  const auth: Record<string, string> = serveToken ? { authorization: `Bearer ${serveToken}` } : {};
+  const headers: Record<string, string> = { 'content-type': 'application/json', ...auth };
   let rpcId = 0;
   const pending = new Map<number, (m: Record<string, unknown>) => void>();
   const resolved = new Map<number, Record<string, unknown>>();
@@ -154,9 +156,10 @@ export async function newSessionViaServe(cwd: string): Promise<string> {
 /** 唤醒场景：loopback 跑一条问题并收集 agent 全文返回。
  * hub 不能跨 Aone 网关跑 ACP（网关下 GET /acp SSE 400，异步应答帧丢失），
  * 故由 runner 在沙箱内 loopback 代跑（与 runTaskViaServe 同构同证明）。 */
-export async function runPromptCollect(workspacePath: string, question: string, timeoutMs = 5 * 60_000): Promise<string> {
+export async function runPromptCollect(workspacePath: string, question: string, timeoutMs = 5 * 60_000, serveToken?: string): Promise<string> {
   const base = `http://127.0.0.1:${servePort()}`;
-  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  const auth: Record<string, string> = serveToken ? { authorization: `Bearer ${serveToken}` } : {};
+  const headers: Record<string, string> = { 'content-type': 'application/json', ...auth };
   let rpcId = 0;
   const pending = new Map<number, (m: Record<string, unknown>) => void>();
   const resolved = new Map<number, Record<string, unknown>>();
@@ -206,7 +209,7 @@ export async function runPromptCollect(workspacePath: string, question: string, 
   const gate = { live: false };
   const openSse = (extra: Record<string, string> = {}): Promise<void> =>
     (async () => {
-      const r = await fetch(`${base}/acp`, { headers: { accept: 'text/event-stream', ...headers, ...extra }, signal: ac.signal });
+      const r = await fetch(`${base}/acp`, { headers: { accept: 'text/event-stream', ...auth, ...headers, ...extra }, signal: ac.signal });
       if (!r.ok || !r.body) return;
       const reader = r.body.getReader();
       const dec = new TextDecoder();
