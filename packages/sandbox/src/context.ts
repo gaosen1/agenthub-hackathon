@@ -208,6 +208,7 @@ export async function rewriteRoute(
   chatId: string,
   sessionId: string,
   cwd: string,
+  opts?: { senderIds?: string[]; isGroup?: boolean },
 ): Promise<void> {
   const path = routesPath(home, wsHash);
   let routes: Record<string, unknown> = {};
@@ -221,15 +222,16 @@ export async function rewriteRoute(
   const prev = routes[oldKey] as { target?: unknown } | undefined;
   delete routes[oldKey];
 
-  // 从 observed-contacts.json 获取群内已知用户，写三段式路由（channelName:senderId:chatId）
-  const senderIds = await resolveSenderIds(home, botName, chatId);
+  // DM 单聊由调用方显式给 senderIds（daemon 不为 DM 写路由、observed 无 chatId）；群聊从 observed-contacts 取
+  const senderIds = opts?.senderIds ?? (await resolveSenderIds(home, botName, chatId));
+  const isGroup = opts?.isGroup ?? true;
   if (senderIds.length > 0) {
     for (const senderId of senderIds) {
       const key = `${botName}:${senderId}:${chatId}`;
-      const prev = routes[key] as { target?: unknown } | undefined;
+      const prev3 = routes[key] as { target?: unknown } | undefined;
       routes[key] = {
         sessionId,
-        target: prev?.target ?? { channelName: botName, senderId, chatId, isGroup: true },
+        target: prev3?.target ?? { channelName: botName, senderId, chatId, isGroup },
         cwd,
       };
     }
@@ -237,7 +239,7 @@ export async function rewriteRoute(
     // 无用户记录时用两段式兼容
     routes[oldKey] = {
       sessionId,
-      target: prev?.target ?? { channelName: botName, senderId: '-', chatId, isGroup: true },
+      target: prev?.target ?? { channelName: botName, senderId: '-', chatId, isGroup },
       cwd,
     };
   }

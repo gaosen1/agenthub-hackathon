@@ -6,7 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { existsSync, promises as fs } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { execFile as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, computeLockHash, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
@@ -84,32 +84,14 @@ async function notifyTaskSummary(
 }
 
 /**
- * fork session：复制 pushed session 并把每条记录的 sessionId 重写为新 id。
- * daemon load 时校验 transcript 只能有单一 session id；若直接 copy，
- * 旧记录带原 id、daemon 追加的新记录带 fork id，重启后 reload 必然 500。
- */
-async function forkSessionFile(src: string, dest: string, forkedId: string): Promise<void> {
-  const raw = await fs.readFile(src, 'utf8');
-  const out = raw
-    .split('\n')
-    .map((line) => {
-      if (!line.trim()) return line;
-      try {
-        const rec = JSON.parse(line) as Record<string, unknown>;
-        if (rec['sessionId']) rec['sessionId'] = forkedId;
-        return JSON.stringify(rec);
-      } catch {
-        return line;
-      }
-    })
-    .join('\n');
-  await fs.writeFile(dest, out);
-}
-
-/**
- * 自动绑定监听器：bot 模式下轮询 daemon 的 observed-contacts.json，发现新 chatId 时写路由。
- * 有 pushed session（push --bot）→ 每群 fork 同一份历史各自演进；
- * 裸 bot（无 /load）→ 每群 ACP 新建 session。绑定后重启 serve 使 routes 生效。
+ * 自动绑定监听器：bot 模式下发现新聊天写路由（写后重启 serve，daemon 启动时才 lazy-reload routes.json）。
+ * - 群聊：轮询 listChats（routes.json ∪ observed-contacts）；
+ * - DM 单聊：daemon 不为 DM 写路由、observed 也只有 user 无 chatId，
+ *   故从 runner 日志的 isGroup=false 消息行提取 senderId/conversationId 发现 DM 聊天；
+ * - 绑定目标统一为 pushed session（bot 载体=单上下文交互单元，群/DM 只是同一任务的不同入口）；
+ *   裸 bot（无 /load）才 ACP 新建 session；
+ * - 启动时 seed 已有路由的聊天，避免 /load 后重复重绑+重启 serve
+ *   （重启会断流并掐掉在途回复——群聊「已读不回」事故根因）。
  */
 let autoBinderTimer: ReturnType<typeof setInterval> | undefined;
 function startAutoBinder(pushedSessionId: string | undefined, workspacePath: string, botName: string): void {
@@ -117,6 +99,12 @@ function startAutoBinder(pushedSessionId: string | undefined, workspacePath: str
   const dHash = daemonWsHash(workspacePath);
   const home = qwenHome();
   const boundChatIds = new Set<string>();
+  void listChats(home, dHash)
+    .then((cs) => {
+      for (const c of cs) boundChatIds.add(c.chatId);
+    })
+    .catch(() => undefined);
+  let logCursor = 0;
 
   autoBinderTimer = setInterval(async () => {
     if (state.mode !== 'bot') {
@@ -124,34 +112,32 @@ function startAutoBinder(pushedSessionId: string | undefined, workspacePath: str
       return;
     }
     try {
+      // DM 发现：扫全量日志增量（含 binder 启动前的 DM）
+      const logs = allLogs();
+      const dms: Array<{ chatId: string; senderIds: string[] }> = [];
+      for (let i = logCursor; i < logs.length; i++) {
+        const c = logs[i]!.c;
+        if (!c.includes('isGroup=false')) continue;
+        const cid = /conversationId=(\S+)/.exec(c)?.[1];
+        const sid = /senderId=(\S+)/.exec(c)?.[1];
+        if (cid && sid) dms.push({ chatId: cid, senderIds: [sid] });
+      }
+      logCursor = logs.length;
+
       const chats = await listChats(home, dHash);
-      for (const chat of chats) {
-        const chatId = chat.chatId;
-        if (boundChatIds.has(chatId)) continue;
-        boundChatIds.add(chatId);
-
-        let sessionId: string;
-        if (pushedSessionId && manifest) {
-          // fork session：复制 pushed session 到新文件
-          const srcSession = join(home, 'projects', manifest.wsHash, 'chats', `${pushedSessionId}.jsonl`);
-          if (!existsSync(srcSession)) {
-            boundChatIds.delete(chatId);
-            continue;
-          }
-          const forkedId = randomUUID();
-          const forkPath = join(home, 'projects', manifest.wsHash, 'chats', `${forkedId}.jsonl`);
-          await forkSessionFile(srcSession, forkPath, forkedId);
-          sessionId = forkedId;
-        } else {
-          sessionId = await newSessionViaServe(workspacePath, serveToken);
-        }
-
-        // 写路由后必须重启 serve，daemon 才能在启动时 lazy-reload routes.json
+      const pending: Array<{ chatId: string; senderIds?: string[]; isGroup?: boolean }> = [
+        ...chats.map((c) => ({ chatId: c.chatId })),
+        ...dms.map((d) => ({ chatId: d.chatId, senderIds: d.senderIds, isGroup: false })),
+      ];
+      for (const t of pending) {
+        if (boundChatIds.has(t.chatId)) continue;
+        boundChatIds.add(t.chatId);
+        const sessionId = pushedSessionId ?? (await newSessionViaServe(workspacePath, serveToken));
         await stopServe();
-        await rewriteRoute(home, dHash, botName, chatId, sessionId, workspacePath);
+        await rewriteRoute(home, dHash, botName, t.chatId, sessionId, workspacePath, { senderIds: t.senderIds, isGroup: t.isGroup });
         await startServe({ mode: 'bot', workspacePath, botName, serveToken });
         await waitServeReady('bot');
-        appendLog('ok', `auto-bind: chat ${chatId} -> session ${sessionId.slice(0, 8)} (serve restarted)`);
+        appendLog('ok', `auto-bind: chat ${t.chatId.slice(0, 12)} -> session ${sessionId.slice(0, 8)} (serve restarted)`);
       }
     } catch {
       // 轮询失败，下次重试
