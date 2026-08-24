@@ -158,10 +158,25 @@ export class Worker {
     }
   }
 
-  /** bot 沙箱 provision：创建路由 / push 接力自动唤醒 / 看门人唤醒 三路共用；成功落 running 并返回实际实例名 */
+  /** bot 沙箱 provision：创建路由 / push 接力自动唤醒 / 看门人唤醒 三路共用；成功落 running 并返回实际实例名。
+   * 单飞 + 存活复用：并发唤醒（worker queued 路径与 waker 消息路径）会建出双沙箱、
+   * token 被后写者覆盖 → 先醒者 /load 401（hf-0fc25f 事故）；实例还活着时直接复用。 */
+  private waking = new Map<number, Promise<string>>();
   async wakeBot(botId: number): Promise<string> {
+    const inflight = this.waking.get(botId);
+    if (inflight) return inflight;
+    const p = this.doWakeBot(botId).finally(() => this.waking.delete(botId));
+    this.waking.set(botId, p);
+    return p;
+  }
+
+  private async doWakeBot(botId: number): Promise<string> {
     const b = getBot(this.db, botId);
     if (!b) throw new Error(`bot ${botId} not found`);
+    if (b.pod_name) {
+      const phase = await this.orchestrator.getPodPhase(b.pod_name).catch(() => 'failed');
+      if (phase === 'ready' || phase === 'pending') return b.pod_name;
+    }
     const slug = b.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'bot';
     const deployName = `ah-bot-${botId}-${slug}`;
     const runnerToken = token();
