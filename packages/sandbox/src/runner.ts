@@ -26,6 +26,7 @@ import {
   rebindRoutes,
   restoreContext,
   rewriteRoute,
+  routesPath,
   unpackInput,
   uploadTo,
   writeCloudModelConfig,
@@ -94,6 +95,8 @@ async function notifyTaskSummary(
  *   （重启会断流并掐掉在途回复——群聊「已读不回」事故根因）。
  */
 let autoBinderTimer: ReturnType<typeof setInterval> | undefined;
+/** binder 状态（/debug/state 埋点可见） */
+const binderState = { seeded: 0, bound: [] as string[], lastTick: '' };
 function startAutoBinder(pushedSessionId: string | undefined, workspacePath: string, botName: string): void {
   if (autoBinderTimer) clearInterval(autoBinderTimer);
   const dHash = daemonWsHash(workspacePath);
@@ -102,6 +105,9 @@ function startAutoBinder(pushedSessionId: string | undefined, workspacePath: str
   void listChats(home, dHash)
     .then((cs) => {
       for (const c of cs) boundChatIds.add(c.chatId);
+      binderState.seeded = boundChatIds.size;
+      binderState.bound = [...boundChatIds];
+      appendLog('sys', `auto-binder seeded ${binderState.seeded} known chat(s)`);
     })
     .catch(() => undefined);
   let logCursor = 0;
@@ -132,12 +138,14 @@ function startAutoBinder(pushedSessionId: string | undefined, workspacePath: str
       for (const t of pending) {
         if (boundChatIds.has(t.chatId)) continue;
         boundChatIds.add(t.chatId);
+        binderState.bound = [...boundChatIds];
+        binderState.lastTick = new Date().toISOString();
         const sessionId = pushedSessionId ?? (await newSessionViaServe(workspacePath, serveToken));
         await stopServe();
         await rewriteRoute(home, dHash, botName, t.chatId, sessionId, workspacePath, { senderIds: t.senderIds, isGroup: t.isGroup });
         await startServe({ mode: 'bot', workspacePath, botName, serveToken });
         await waitServeReady('bot');
-        appendLog('ok', `auto-bind: chat ${t.chatId.slice(0, 12)} -> session ${sessionId.slice(0, 8)} (serve restarted)`);
+        appendLog('ok', `auto-bind: chat ${t.chatId.slice(0, 12)} (dm=${t.isGroup === false}) -> session ${sessionId.slice(0, 8)} (serve restarted)`);
       }
     } catch {
       // 轮询失败，下次重试
@@ -254,6 +262,14 @@ export function buildRunner(): FastifyInstance {
           if (body.bindChatId && !existingChats.some(c => c.chatId === body.bindChatId)) {
             await rewriteRoute(qwenHome(), dHash, botName, body.bindChatId, manifest.sessionId, manifest.workspacePath);
             appendLog('ok', `explicit bind chat ${body.bindChatId} -> session ${manifest.sessionId.slice(0, 8)}`);
+          }
+          // 埋点：/load 后路由表全量落日志，便于排查钉钉路由归属
+          try {
+            const rj = JSON.parse(await fs.readFile(routesPath(qwenHome(), dHash), 'utf8')) as Record<string, { sessionId?: string }>;
+            const dump = Object.entries(rj).map(([k, v]) => `${k} -> ${(v.sessionId ?? '?').slice(0, 8)}`).join(' | ');
+            appendLog('sys', `routes after /load rebind: ${dump || '(empty)'}`);
+          } catch {
+            appendLog('sys', 'routes after /load rebind: (none)');
           }
           // serve 先起：钉钉流与 Web Shell 立即可用；task 走 serve ACP 流式执行，外部端可实时观看
           await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName, serveToken });
@@ -380,6 +396,61 @@ export function buildRunner(): FastifyInstance {
     const wsHash = manifest?.wsHash ?? botWorkspace?.wsHash;
     if (!wsHash) return reply.send({ items: [] });
     return reply.send({ items: await listChats(qwenHome(), wsHash) });
+  });
+
+  // 埋点：路由/observed/pushed session 尾部/binder 状态全量现场，排查钉钉路由归属用
+  app.get('/debug/state', async (_req, reply) => {
+    const home = qwenHome();
+    const daemonDir = join(home, 'channels', 'daemon');
+    const routes: Record<string, unknown> = {};
+    const observed: Record<string, unknown> = {};
+    let dirs: string[] = [];
+    try {
+      dirs = (await fs.readdir(daemonDir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
+    } catch {
+      /* 无 daemon 目录 */
+    }
+    for (const dir of dirs) {
+      try {
+        routes[dir] = JSON.parse(await fs.readFile(join(daemonDir, dir, 'routes.json'), 'utf8'));
+      } catch {
+        routes[dir] = null;
+      }
+      try {
+        const o = JSON.parse(await fs.readFile(join(daemonDir, dir, 'observed-contacts.json'), 'utf8')) as { observations?: Array<Record<string, unknown>> };
+        observed[dir] = o.observations ?? [];
+      } catch {
+        observed[dir] = null;
+      }
+    }
+    let sessionTail: unknown[] = [];
+    if (manifest) {
+      try {
+        const raw = await fs.readFile(join(home, 'projects', manifest.wsHash, 'chats', `${manifest.sessionId}.jsonl`), 'utf8');
+        sessionTail = raw
+          .trim()
+          .split('\n')
+          .slice(-10)
+          .map((l) => {
+            try {
+              const r = JSON.parse(l) as Record<string, unknown>;
+              const content = r.content as unknown;
+              return { type: r.type, text: (typeof content === 'string' ? content : JSON.stringify(content) ?? '').slice(0, 80) };
+            } catch {
+              return null;
+            }
+          });
+      } catch {
+        sessionTail = ['(no pushed session file)'];
+      }
+    }
+    return reply.send({
+      binder: binderState,
+      routes,
+      observed,
+      sessionTail,
+      manifest: manifest ? { sessionId: manifest.sessionId, wsHash: manifest.wsHash, workspacePath: manifest.workspacePath } : null,
+    });
   });
 
   // bot：绑定指定群到 session（创建 session → 停 serve → 改路由 → 重启，spec §8.2）

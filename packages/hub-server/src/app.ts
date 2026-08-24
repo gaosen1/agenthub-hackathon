@@ -760,6 +760,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
   const wakers = new Map<number, DingtalkStreamWaker>();
   const wakeBot = async (b: BotRow, m: DingBotMessage): Promise<void> => {
     const reply = (text: string): Promise<void> => replyViaWebhook(m.sessionWebhook, b.name, text);
+    // 埋点：兼底 waker 收到消息即录（convType 1=DM 2=群），用于排查「谁在回钉钉」
+    console.error(`[waker:bot${b.id}] inbound convType=${m.conversationType} cid=${m.conversationId} sender=${m.senderId} text=${(m.text || '').slice(0, 40)}`);
     await reply('云端开发机未启动或已过期，正在唤醒，就绪后自动回复（约 30 秒）…');
     // 先断兜底连接，避免与沙箱原生 Stream 同 clientId 互踢
     wakers.get(b.id)?.stop();
@@ -789,6 +791,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       });
       if (!pr.ok) throw new Error(`acp-prompt relay → ${pr.status}`);
       const answer = ((await pr.json()) as { answer?: string }).answer ?? '';
+      console.error(`[waker:bot${b.id}] replied via acp-prompt len=${answer.length}`);
       await reply(answer ? answer.slice(0, 5000) : '（空回复）');
     } catch (e) {
       db.prepare("UPDATE bots SET status='error' WHERE id=? AND status != 'deleted'").run(b.id);
@@ -803,7 +806,8 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       const alive = b.pod_name ? (await sb.orchestrator.getPodPhase(b.pod_name).catch(() => 'failed')) === 'ready' : false;
       const w = wakers.get(b.id);
       if (alive && w) {
-        // 沙箱复活：交棒原生 Stream，撤兜底
+        // 沙箱复活：交棒原生 Stream，撤兼底
+        console.error(`[waker:bot${b.id}] sandbox alive, handing over native stream`);
         w.stop();
         wakers.delete(b.id);
         continue;
