@@ -111,6 +111,8 @@ function startAutoBinder(pushedSessionId: string | undefined, workspacePath: str
     })
     .catch(() => undefined);
   let logCursor = 0;
+  /** 日志发现但尚未绑定的聊天（busy 推迟后不能丢，游标已前进） */
+  const awaiting: Array<{ chatId: string; senderIds: string[]; isGroup: boolean }> = [];
 
   autoBinderTimer = setInterval(async () => {
     if (state.mode !== 'bot') {
@@ -118,26 +120,44 @@ function startAutoBinder(pushedSessionId: string | undefined, workspacePath: str
       return;
     }
     try {
-      // DM 发现：扫全量日志增量（含 binder 启动前的 DM）
+      // DM/群发现：扫全量日志增量（含 binder 启动前的消息）。
+      // observed-contacts 只记 user 不记 group，listChats 拿不到群的三段式 key（user scope 只认三段式），
+      // 故从消息行提取 senderId/conversationId 是唯一可靠来源。
       const logs = allLogs();
-      const dms: Array<{ chatId: string; senderIds: string[] }> = [];
       for (let i = logCursor; i < logs.length; i++) {
         const c = logs[i]!.c;
-        if (!c.includes('isGroup=false')) continue;
+        const isGroup = c.includes('isGroup=true') ? true : c.includes('isGroup=false') ? false : undefined;
+        if (isGroup === undefined) continue;
         const cid = /conversationId=(\S+)/.exec(c)?.[1];
-        const sid = /senderId=(\S+)/.exec(c)?.[1];
-        if (cid && sid) dms.push({ chatId: cid, senderIds: [sid] });
+        // daemon 路由 key 的 senderId 用 staffId（见 daemon 自写路由），原始 senderId 是 $:LWCP token
+        const sid = /senderStaffId=(\S+)/.exec(c)?.[1] ?? /senderId=(\S+)/.exec(c)?.[1];
+        if (cid && sid && !boundChatIds.has(cid) && !awaiting.some((a) => a.chatId === cid)) {
+          awaiting.push({ chatId: cid, senderIds: [sid], isGroup });
+        }
       }
       logCursor = logs.length;
+
+      // daemon 忙窗口（有 enqueued 未 completed 的 prompt）不重启 serve，掐在途回复=已读不回；
+      // 路由发现照记，下一 tick 再重启生效
+      let lastEnq = -1;
+      let lastDone = -1;
+      for (let i = logs.length - 1; i >= 0 && (lastEnq < 0 || lastDone < 0); i--) {
+        if (lastEnq < 0 && logs[i]!.c.includes('prompt enqueued')) lastEnq = i;
+        if (lastDone < 0 && logs[i]!.c.includes('turn completed')) lastDone = i;
+      }
+      const busy = lastEnq >= 0 && lastEnq > lastDone;
 
       const chats = await listChats(home, dHash);
       const pending: Array<{ chatId: string; senderIds?: string[]; isGroup?: boolean }> = [
         ...chats.map((c) => ({ chatId: c.chatId })),
-        ...dms.map((d) => ({ chatId: d.chatId, senderIds: d.senderIds, isGroup: false })),
+        ...awaiting,
       ];
       for (const t of pending) {
         if (boundChatIds.has(t.chatId)) continue;
+        if (busy) continue; //  defer：daemon 在途回复优先，下一 tick 重试
         boundChatIds.add(t.chatId);
+        const ai = awaiting.findIndex((a) => a.chatId === t.chatId);
+        if (ai >= 0) awaiting.splice(ai, 1);
         binderState.bound = [...boundChatIds];
         binderState.lastTick = new Date().toISOString();
         const sessionId = pushedSessionId ?? (await newSessionViaServe(workspacePath, serveToken));
@@ -453,7 +473,8 @@ export function buildRunner(): FastifyInstance {
     });
   });
 
-  // bot：绑定指定群到 session（创建 session → 停 serve → 改路由 → 重启，spec §8.2）
+  // bot：绑定指定群/DM 到 session（创建 session → 停 serve → 改路由 → 重启，spec §8.2）
+  // senderId/isGroup 可选：群/DM 的三段式路由 key 需要 senderId（observed 不记 group，operator 后门）
   app.post('/bind', async (req, reply) => {
     const body = RunnerBindReqSchema.parse(req.body);
     if (state.mode !== 'bot') {
@@ -487,7 +508,10 @@ export function buildRunner(): FastifyInstance {
     }
     await stopServe();
     // 路由必须写到 daemon 自己的 hash 目录（SHA256[:16]），写 manifest.wsHash 目录 daemon 不读
-    await rewriteRoute(qwenHome(), daemonWsHash(cwd), botName, body.chatId, sessionId, cwd);
+    await rewriteRoute(qwenHome(), daemonWsHash(cwd), botName, body.chatId, sessionId, cwd, {
+      ...(body.senderId ? { senderIds: [body.senderId] } : {}),
+      ...(body.isGroup !== undefined ? { isGroup: body.isGroup } : {}),
+    });
     await startServe({ mode: 'bot', workspacePath: cwd, botName, serveToken });
     await waitServeReady('bot');
     appendLog('ok', `rebound chat ${body.chatId} -> session ${sessionId}`);

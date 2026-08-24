@@ -60,6 +60,9 @@ export type RunnerChatsResp = z.infer<typeof RunnerChatsRespSchema>;
 export const RunnerBindReqSchema = z.object({
   chatId: z.string().min(1),
   sessionId: z.string().min(1),
+  /** 三段式路由 key 需要 senderId（observed 不记 group，operator 后门） */
+  senderId: z.string().min(1).optional(),
+  isGroup: z.boolean().optional(),
 });
 export type RunnerBindReq = z.infer<typeof RunnerBindReqSchema>;
 
