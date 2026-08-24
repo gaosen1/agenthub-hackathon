@@ -295,6 +295,7 @@ export function buildRunner(): FastifyInstance {
           await startServe({ mode: 'bot', workspacePath: manifest.workspacePath, botName, serveToken });
           await waitServeReady('bot');
           state.serveReady = true;
+          state.lastError = undefined; // 裸启动等历史错误不污染本次 handoff
           appendLog('ok', 'bot serve ready (dingtalk stream connected on qwen side)');
           // task 经 serve ACP 流式执行（侧栏 Web Shell 实时可见）；serve 路径不可用时回退 headless 续跑
           if (body.task) {
@@ -328,6 +329,7 @@ export function buildRunner(): FastifyInstance {
         await startServe({ mode: 'web', workspacePath: manifest.workspacePath, serveToken });
         await waitServeReady('web');
         state.serveReady = true;
+        state.lastError = undefined;
         appendLog('ok', 'qwen serve ready');
         if (body.task) {
           let code: number;
@@ -596,8 +598,29 @@ if (process.env.VITEST === undefined) {
             // 裸 bot 也要自动绑路由：新聊天 ACP 新建 session；push --bot 的 /load 会替换为 fork 模式 binder
             startAutoBinder(undefined, workspacePath, botName);
           } catch (e) {
-            state.lastError = e instanceof Error ? e.message : String(e);
-            appendLog('err', `bot auto-start failed: ${state.lastError}`);
+            // 裸启动被 waker 占流等瞬态失败不污染 handoff（已加载时 lastError 会误杀 running handoff，hf-dc6913 事故）；
+            // 无 handoff 时周期重试，等 waker 交棒后自愈
+            const msg = e instanceof Error ? e.message : String(e);
+            appendLog('err', `bot auto-start failed: ${msg}`);
+            if (!state.loadedHandoffId) {
+              state.lastError = msg;
+              setTimeout(() => {
+                if (state.loadedHandoffId || state.mode !== 'bot') return;
+                appendLog('sys', 'bot auto-start retry');
+                void (async () => {
+                  try {
+                    const retryWs = botWorkspace?.workspacePath ?? defaultWs;
+                    await startServe({ mode: 'bot', workspacePath: retryWs, botName });
+                    await waitServeReady('bot');
+                    state.serveReady = true;
+                    state.lastError = undefined;
+                    appendLog('ok', 'bot serve ready (retry, dingtalk stream connected)');
+                  } catch (e2) {
+                    if (!state.loadedHandoffId) state.lastError = e2 instanceof Error ? e2.message : String(e2);
+                  }
+                })();
+              }, 20_000);
+            }
           }
         })();
       }
