@@ -176,6 +176,9 @@ export class Worker {
     if (b.pod_name) {
       const phase = await this.orchestrator.getPodPhase(b.pod_name).catch(() => 'failed');
       if (phase === 'ready' || phase === 'pending') return b.pod_name;
+      // 死实例先清再建：不清会累积孤儿沙箱，同 clientId 互抢钉钉 stream
+      // （多沙箱抢流事故：DM 落旧沙箱回旧上下文、新沙箱收不到群消息）
+      await this.orchestrator.deleteDeployment(b.pod_name).catch(() => undefined);
     }
     const slug = b.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'bot';
     const deployName = `ah-bot-${botId}-${slug}`;
