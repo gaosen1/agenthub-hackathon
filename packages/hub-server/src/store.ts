@@ -47,10 +47,15 @@ export function setHandoffArchived(db: DB, id: string, archived: boolean): void 
   db.prepare('UPDATE handoffs SET archived=?, updated_at=? WHERE id=?').run(archived ? 1 : 0, nowIso(), id);
 }
 
-/** 删除 handoff：事件级联清；sandboxes 历史行故意无 FK，保留（S5 设计） */
+/** 删除 handoff：事件级联清；sandboxes 历史行故意无 FK，保留（S5 设计）；
+ * bots.current_handoff_id 有 FK 指向 handoffs，先解引用再删，否则 foreign_keys=ON 下抛约束错（hf-306082 删不掉事故）；
+ * 事务包裹：旧实现先删事件后删主行，主行失败会留下无事件的半残行 */
 export function deleteHandoffRow(db: DB, id: string): void {
-  db.prepare('DELETE FROM handoff_events WHERE handoff_id=?').run(id);
-  db.prepare('DELETE FROM handoffs WHERE id=?').run(id);
+  db.transaction((hid: string) => {
+    db.prepare('UPDATE bots SET current_handoff_id=NULL WHERE current_handoff_id=?').run(hid);
+    db.prepare('DELETE FROM handoff_events WHERE handoff_id=?').run(hid);
+    db.prepare('DELETE FROM handoffs WHERE id=?').run(hid);
+  })(id);
 }
 
 export interface BotRow {
