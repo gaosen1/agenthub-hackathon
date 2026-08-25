@@ -178,6 +178,11 @@ function startAutoBinder(pushedSessionId: string | undefined, workspacePath: str
 const exec = promisify(execCb);
 const WORK_ROOT = process.env.RUNNER_WORK_DIR ?? join(tmpdir(), 'agenthub-runner');
 
+/** qwen serve daemon 的工具注册不读 settings tools.exclude（daemon chunk 零引用，实测活沙箱配置写入正确仍被反问），
+ * 设置层禁用对 serve 路径无效；relay 层在任务文本追加无人值守约束，模型自主避开 ask_user_question（反问挂 5 分钟被 cancel 后 turn 直接结束） */
+const UNATTENDED_TASK_SUFFIX =
+  '\n\n[AgentHub 无人值守接力约束] 本环境无人应答：禁止使用 ask_user_question 工具；需要确认时按最合理假设自主推进，并在最终总结中说明假设。';
+
 /** 最近活动时间：控制面打点 ∨ daemon session 文件 mtime。
  * 钉钉消息直达 daemon，runner/hub 都看不见；但每轮会话都追加写 chats/*.jsonl，
  * mtime 是唯一的会话活动信号（bot 驻留期空闲 TTL 判据，hf-0dc37c 硬超时误杀修复） */
@@ -332,12 +337,13 @@ export function buildRunner(): FastifyInstance {
           appendLog('ok', 'bot serve ready (dingtalk stream connected on qwen side)');
           // task 经 serve ACP 流式执行（侧栏 Web Shell 实时可见）；serve 路径不可用时回退 headless 续跑
           if (body.task) {
+            const taskText = body.task + UNATTENDED_TASK_SUFFIX;
             let code: number;
             try {
-              code = await runTaskViaServe(manifest.workspacePath, manifest.sessionId, body.task, serveToken);
+              code = await runTaskViaServe(manifest.workspacePath, manifest.sessionId, taskText, serveToken);
             } catch (e) {
               appendLog('sys', `serve task path unavailable (${e instanceof Error ? e.message : String(e)}); fallback headless`);
-              code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
+              code = await runTask(manifest.workspacePath, manifest.sessionId, taskText);
             }
             state.taskDone = true;
             if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
@@ -365,12 +371,13 @@ export function buildRunner(): FastifyInstance {
         state.lastError = undefined;
         appendLog('ok', 'qwen serve ready');
         if (body.task) {
+          const taskText = body.task + UNATTENDED_TASK_SUFFIX;
           let code: number;
           try {
-            code = await runTaskViaServe(manifest.workspacePath, manifest.sessionId, body.task, serveToken);
+            code = await runTaskViaServe(manifest.workspacePath, manifest.sessionId, taskText, serveToken);
           } catch (e) {
             appendLog('sys', `serve task path unavailable (${e instanceof Error ? e.message : String(e)}); fallback headless`);
-            code = await runTask(manifest.workspacePath, manifest.sessionId, body.task);
+            code = await runTask(manifest.workspacePath, manifest.sessionId, taskText);
           }
           state.taskDone = true;
           if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
