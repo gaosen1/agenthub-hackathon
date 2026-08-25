@@ -74,9 +74,9 @@ export function IdeView() {
             <div className="card-b" style={{ fontSize: 12.5, color: 'var(--tx2)', lineHeight: 1.8 }}>
               {nasMissing ? (
                 <>
-                  集群 NAS 共享层尚未预置 code-server。请联系管理员执行
+                  沙箱环境未预置 code-server。k8s 集群可执行
                   <code className="mono" style={{ margin: '0 4px' }}>deploy/k8s/30-nas-seed-job.yaml</code>
-                  完成一次性播种后重试。
+                  播种 NAS 共享层；其他后端需重建沙箱镜像（Dockerfile 已默认内置 code-server）并重建沙箱后重试。
                 </>
               ) : (
                 errMsg

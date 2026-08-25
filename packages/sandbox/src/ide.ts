@@ -14,7 +14,12 @@ export const IDE_PORT = Number(process.env.IDE_PORT ?? 8083);
 export const sharedDir = (): string => process.env.SHARED_DIR ?? '/mnt/shared';
 
 /** seed Job 约定的目录布局：<shared>/tools/code-server/<version>/ + current 软链 */
-export const codeServerBin = (): string => join(sharedDir(), 'tools', 'code-server', 'current', 'bin', 'code-server');
+const nasBin = (): string => join(sharedDir(), 'tools', 'code-server', 'current', 'bin', 'code-server');
+/** 镜像内置（npm -g 默认位置，env 可覆盖）：Aone 等无 NAS 后端的供给路径 */
+const bakedBin = (): string => process.env.CODE_SERVER_BIN ?? '/usr/local/bin/code-server';
+
+/** NAS 预置优先（k8s 共享层），缺失回退镜像内置二进制 */
+export const codeServerBin = (): string => (ideDeps.exists(nasBin()) ? nasBin() : bakedBin());
 
 let proc: ChildProcess | undefined;
 let lastError: string | undefined;
@@ -69,7 +74,7 @@ export async function ensureIde(workspacePath: string): Promise<RunnerIdeStatusR
     state.ideReady = false;
   }
   if (!codeServerInstalled()) {
-    lastError = 'code-server not installed on shared layer';
+    lastError = 'code-server not installed (neither NAS shared layer nor baked into image)';
     return { ready: false, error: lastError };
   }
 

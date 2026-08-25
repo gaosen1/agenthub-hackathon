@@ -14,12 +14,13 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debia
 
 ARG QWEN_VERSION=0.21.14
 RUN npm config set registry https://registry.npmmirror.com \
-    && npm install -g @qwen-code/qwen-code@${QWEN_VERSION}
+    && npm install -g @qwen-code/qwen-code@${QWEN_VERSION} \
+    && npm install -g code-server
 
 WORKDIR /app
 # 由 deploy/build-sandbox.sh 先执行 pnpm 构建与 deploy 打包，再 docker build
 COPY sandbox-dist/ ./
 
 ENV RUNNER_MODE=web
-EXPOSE 8080 8081
+EXPOSE 8080 8081 8083
 CMD ["node", "dist/runner.js"]
