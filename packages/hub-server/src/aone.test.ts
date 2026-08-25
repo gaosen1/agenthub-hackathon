@@ -39,6 +39,12 @@ function fakeSdk() {
           if (!created.some((_, i) => `sb-${i + 1}` === id)) throw new Error('not found');
           return { status: { state: states.get(id) ?? 'Running' } };
         },
+        listSandboxInfos: async () =>
+          created.map((opts, i) => ({
+            id: `sb-${i + 1}`,
+            status: { state: states.get(`sb-${i + 1}`) ?? 'Running' },
+            metadata: (opts as { metadata?: Record<string, string> }).metadata ?? {},
+          })),
         close: async () => undefined,
       }),
     },
@@ -91,6 +97,17 @@ describe('AoneOrchestrator', () => {
     const id = await orch.createPod(spec);
     expect(await orch.findPodNameByLabel({ 'agenthub/kind': 'web' })).toBe(id);
     expect(await orch.findPodNameByLabel({ 'agenthub/kind': 'bot' })).toBeUndefined();
+  });
+
+  it('hub 重启后（内存 labels 空）经 manager 真查询仍可发现实例（hf-6bd538 回归）', async () => {
+    const { sdk } = fakeSdk();
+    const orch1 = new AoneOrchestrator(cfg, sdk);
+    const id = await orch1.createPod(spec);
+    // 模拟重启：同一 SDK 的新 orchestrator，内存 map 为空
+    const orch2 = new AoneOrchestrator(cfg, sdk);
+    expect(await orch2.findPodNameByLabel({ 'agenthub/kind': 'web' })).toBe(id);
+    const pods = await orch2.listSandboxPods();
+    expect(pods.some((p) => p.name === id && p.phase === 'ready')).toBe(true);
   });
 
   it('deletePod 触发 kill', async () => {

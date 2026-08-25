@@ -18,6 +18,7 @@ export interface AoneSandboxLike {
 }
 export interface AoneManagerLike {
   getSandboxInfo(id: string): Promise<{ status?: { state?: string } }>;
+  listSandboxInfos(): Promise<unknown>;
   close(): Promise<void>;
 }
 export interface AoneSdkLike {
@@ -154,9 +155,31 @@ export class AoneOrchestrator implements PodOrchestrator {
     return STATE_TO_PHASE[info.status.state] ?? 'pending';
   }
 
-  /** v1：返回本 hub 知晓的实例；全量查询走 SandboxManager.listSandboxInfos（后续迭代） */
+  /** 全量查询走 SandboxManager.listSandboxInfos：hub 重启后内存 labels 空，
+   * 不查真接口 bot 实例不可发现，handoff 永卡 queued（hf-6bd538 事故）；顺带回填内存 map */
+  private async remotePods(): Promise<Array<{ name: string; phase: PodPhase; labels: Record<string, string> }>> {
+    const list = await (await this.mgr()).listSandboxInfos();
+    const arr = (Array.isArray(list) ? list : ((list as { items?: unknown[] }).items ?? [])) as Array<Record<string, unknown>>;
+    const pods: Array<{ name: string; phase: PodPhase; labels: Record<string, string> }> = [];
+    for (const info of arr) {
+      const name = String(info['id'] ?? '');
+      if (!name) continue;
+      const labels = (info['metadata'] as Record<string, string> | undefined) ?? {};
+      const st = (info['status'] as { state?: string } | undefined)?.state;
+      const phase = (st && STATE_TO_PHASE[st]) || 'pending';
+      this.labels.set(name, labels);
+      pods.push({ name, phase, labels });
+    }
+    return pods;
+  }
+
   async listSandboxPods(): Promise<SandboxPodInfo[]> {
-    return [...this.labels.entries()].map(([name, labels]) => ({ name, phase: 'ready' as PodPhase, labels }));
+    try {
+      return await this.remotePods();
+    } catch {
+      // 集群瞬断回退内存视图（reconcile 静默返回，S8）
+      return [...this.labels.entries()].map(([name, labels]) => ({ name, phase: 'ready' as PodPhase, labels }));
+    }
   }
 
   /** Aone 无 Secret 对象：内存暂存，create 时并入 env（敏感值不进镜像层） */
@@ -171,6 +194,10 @@ export class AoneOrchestrator implements PodOrchestrator {
   async findPodNameByLabel(want: Record<string, string>): Promise<string | undefined> {
     for (const [name, labels] of this.labels) {
       if (Object.entries(want).every(([k, v]) => labels[k] === v)) return name;
+    }
+    // 内存 map 空（重启后）回退真查询并回填
+    for (const p of await this.remotePods()) {
+      if (Object.entries(want).every(([k, v]) => p.labels[k] === v)) return p.name;
     }
     return undefined;
   }
