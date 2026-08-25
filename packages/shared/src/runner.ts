@@ -14,6 +14,8 @@ export const RunnerHealthzRespSchema = z.object({
   lastError: z.string().optional(),
   /** task relay 是否已完成（B 线 Worker 判断 task 续跑结束的依据） */
   taskDone: z.boolean().optional(),
+  /** 沙箱内最近活动时间（ISO）：runner 控制面事件 + daemon session 文件写入；bot 驻留期空闲 TTL 判据 */
+  lastActivityAt: z.string().optional(),
 });
 export type RunnerHealthzResp = z.infer<typeof RunnerHealthzRespSchema>;
 

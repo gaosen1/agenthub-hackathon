@@ -420,9 +420,11 @@ export class Worker {
           this.enterPackaging(h, 'done');
           continue;
         }
-        // 硬超时（带 task 的 handoff）
+        // 硬超时只约束任务执行期：taskDone 后时钟停摆（bot 转驻留交互）。
+        // 旧逻辑以进 running 起算一刀切，任务完成后的群聊追问在 deadline 被连坐砍断（hf-0dc37c 事故）
         const runningSince = statusEnteredAt(this.db, h.id, 'running');
-        if (h.task && runningSince && Date.now() - Date.parse(runningSince) > h.timeout_minutes * 60_000) {
+        const runningSinceMs = runningSince ? Date.parse(runningSince) : undefined;
+        if (h.task && !health.taskDone && runningSinceMs && Date.now() - runningSinceMs > h.timeout_minutes * 60_000) {
           this.enterPackaging(h, 'expired', 'hard timeout');
           continue;
         }
@@ -430,6 +432,16 @@ export class Worker {
         if (h.kind === 'web' && !h.task && h.last_active_at && Date.now() - Date.parse(h.last_active_at) > idleTtlMs) {
           this.enterPackaging(h, 'expired', 'idle ttl');
           continue;
+        }
+        // bot 驻留期（含 task 完成后）：钉钉消息直达 daemon，hub 看不见，活跃度由 runner healthz 上报
+        // （控制面打点 ∨ session jsonl mtime）；活跃即续命，进行中的轮次不会被误杀
+        if (h.kind === 'bot') {
+          const actMs = health.lastActivityAt ? Date.parse(health.lastActivityAt) : NaN;
+          const basis = Number.isFinite(actMs) ? Math.max(actMs, runningSinceMs ?? 0) : runningSinceMs;
+          if (basis && Date.now() - basis > idleTtlMs) {
+            this.enterPackaging(h, 'expired', 'idle ttl');
+            continue;
+          }
         }
       } catch {
         // runner 不可达：先区分「瞬断」与「确失」——

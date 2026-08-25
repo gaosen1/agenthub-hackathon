@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { execFile as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { RunnerBindReqSchema, RunnerLoadReqSchema, RunnerSnapshotReqSchema, computeLockHash, getWorkspaceScopeDirName, type RunnerHealthzResp } from '@agenthub/shared';
-import { allLogs, appendLog, logsAfter, state } from './state.js';
+import { allLogs, appendLog, logsAfter, state, touchActivity } from './state.js';
 import { runTask, runTaskViaServe, newSessionViaServe, runPromptCollect, startServe, stopServe, waitServeReady } from './qwen.js';
 import { startShellProxy } from './shell-proxy.js';
 import { ensureIde, ideStatus } from './ide.js';
@@ -178,6 +178,22 @@ function startAutoBinder(pushedSessionId: string | undefined, workspacePath: str
 const exec = promisify(execCb);
 const WORK_ROOT = process.env.RUNNER_WORK_DIR ?? join(tmpdir(), 'agenthub-runner');
 
+/** 最近活动时间：控制面打点 ∨ daemon session 文件 mtime。
+ * 钉钉消息直达 daemon，runner/hub 都看不见；但每轮会话都追加写 chats/*.jsonl，
+ * mtime 是唯一的会话活动信号（bot 驻留期空闲 TTL 判据，hf-0dc37c 硬超时误杀修复） */
+async function lastActivityAt(): Promise<string | undefined> {
+  let ms = state.lastActivityAt ? Date.parse(state.lastActivityAt) : 0;
+  const projects = join(qwenHome(), 'projects');
+  for (const shard of await fs.readdir(projects).catch(() => [] as string[])) {
+    const chats = join(projects, shard, 'chats');
+    for (const f of await fs.readdir(chats).catch(() => [] as string[])) {
+      const st = await fs.stat(join(chats, f)).catch(() => undefined);
+      if (st && st.mtimeMs > ms) ms = st.mtimeMs;
+    }
+  }
+  return ms > 0 ? new Date(ms).toISOString() : undefined;
+}
+
 let manifest: HandoffManifest | undefined;
 let serveToken: string | undefined;
 let botWorkspace: { workspacePath: string; wsHash: string; botName: string } | undefined;
@@ -194,18 +210,23 @@ export function buildRunner(): FastifyInstance {
     }
   });
 
-  app.get('/healthz', async (): Promise<RunnerHealthzResp & { taskDone: boolean }> => ({
-    ok: true,
-    mode: state.mode,
-    serveReady: state.serveReady,
-    taskDone: state.taskDone,
-    ...(state.loadedHandoffId ? { loadedHandoffId: state.loadedHandoffId } : {}),
-    ...(state.lastError ? { lastError: state.lastError } : {}),
-  }));
+  app.get('/healthz', async (): Promise<RunnerHealthzResp & { taskDone: boolean }> => {
+    const act = await lastActivityAt();
+    return {
+      ok: true,
+      mode: state.mode,
+      serveReady: state.serveReady,
+      taskDone: state.taskDone,
+      ...(state.loadedHandoffId ? { loadedHandoffId: state.loadedHandoffId } : {}),
+      ...(state.lastError ? { lastError: state.lastError } : {}),
+      ...(act ? { lastActivityAt: act } : {}),
+    };
+  });
 
   // 唤醒 relay：hub 跨 Aone 网关跑 ACP 会丢 SSE 应答帧（GET /acp 400），
   // 由 runner 在沙箱内 loopback 代跑并收集全文返回
   app.post('/acp-prompt', async (req) => {
+    touchActivity();
     const body = (req.body ?? {}) as { question?: string; cwd?: string };
     const ws = body.cwd ?? state.workspacePath ?? botWorkspace?.workspacePath ?? join(WORK_ROOT, 'bot-workspace');
     const answer = await runPromptCollect(ws, body.question ?? '', 5 * 60_000, serveToken);
@@ -222,6 +243,7 @@ export function buildRunner(): FastifyInstance {
     state.lastError = undefined;
     serveToken = body.serveToken;
     startedAt = Date.now();
+    touchActivity();
 
     void (async () => {
       try {
@@ -367,6 +389,7 @@ export function buildRunner(): FastifyInstance {
 
   // 现场打包上传返回包
   app.post('/snapshot', async (req, reply) => {
+    touchActivity();
     const body = RunnerSnapshotReqSchema.parse(req.body);
     if (!manifest) return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'nothing loaded' } });
     appendLog('sys', 'packaging output');
@@ -489,6 +512,7 @@ export function buildRunner(): FastifyInstance {
   // bot：绑定指定群/DM 到 session（创建 session → 停 serve → 改路由 → 重启，spec §8.2）
   // senderId/isGroup 可选：群/DM 的三段式路由 key 需要 senderId（observed 不记 group，operator 后门）
   app.post('/bind', async (req, reply) => {
+    touchActivity();
     const body = RunnerBindReqSchema.parse(req.body);
     if (state.mode !== 'bot') {
       return reply.status(409).send({ error: { code: 'ERR_STATE', message: 'bind requires bot mode' } });

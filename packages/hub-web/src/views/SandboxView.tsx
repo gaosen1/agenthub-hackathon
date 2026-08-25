@@ -132,7 +132,7 @@ function PolicyCard({ policy }: { policy: SandboxListResp['policy'] }) {
         </div>
         <div>
           <i className="fa-solid fa-hourglass-end" style={{ color: 'var(--warn)', width: 20 }} />
-          默认 {policy.defaultTimeoutMinutes} 分钟硬超时（push 时可按任务覆盖），到期强制 packaging 并回收
+          任务执行期默认 {policy.defaultTimeoutMinutes} 分钟硬超时（push 时可按任务覆盖）；task 完成后时钟停摆，bot 转活跃度驱动的空闲回收
         </div>
         <div>
           <i className="fa-regular fa-clock" style={{ color: 'var(--cyan)', width: 20 }} />

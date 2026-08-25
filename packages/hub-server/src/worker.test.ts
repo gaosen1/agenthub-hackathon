@@ -56,6 +56,8 @@ interface FakeRunnerState {
   snapshots: unknown[];
   taskDone: boolean;
   lastError?: string;
+  /** 沙箱上报的最近活动时间（bot 驻留期空闲 TTL 判据） */
+  lastActivityAt?: string;
   logs: Array<{ t: string; tag: string; c: string }>;
 }
 
@@ -70,7 +72,7 @@ function startFakeRunner(): Promise<{ url: string; state: FakeRunnerState; serve
         res.end(JSON.stringify(obj));
       };
       if (req.url === '/healthz')
-        return send(200, { ok: true, mode: 'web', serveReady: true, taskDone: state.taskDone, ...(state.lastError ? { lastError: state.lastError } : {}) });
+        return send(200, { ok: true, mode: 'web', serveReady: true, taskDone: state.taskDone, ...(state.lastError ? { lastError: state.lastError } : {}), ...(state.lastActivityAt ? { lastActivityAt: state.lastActivityAt } : {}) });
       if (req.url === '/load') {
         state.loads.push(JSON.parse(body || '{}'));
         return send(200, { accepted: true });
@@ -191,6 +193,55 @@ describe('worker 全链路', () => {
     runner.state.lastError = 'load exploded';
     await worker.tick(); // → packaging → failed（同 tick）
     expect(getHandoff(db, 'hf-000003')!.status).toBe('failed');
+  });
+
+  // ── bot 生命周期两段式：任务执行期硬超时，taskDone 后转活跃度驱动的空闲 TTL（hf-0dc37c）──
+  const insertRunningBot = (id: string): void => {
+    insertHandoff(db, { id, task: 't', kind: 'bot', timeout: 1, status: 'running' });
+    db.prepare('UPDATE handoffs SET pod_name=? WHERE id=?').run('ah-bot-x', id);
+    orch.pods.set('ah-bot-x', 'ready');
+  };
+  const backdateRunning = (id: string, msAgo: number): void => {
+    db.prepare("UPDATE handoff_events SET at=? WHERE handoff_id=? AND payload='running'").run(
+      new Date(Date.now() - msAgo).toISOString(), id,
+    );
+  };
+
+  it('bot task 完成后不再受硬超时（驻留等 pull，hf-0dc37c 回归）', async () => {
+    insertRunningBot('hf-000010');
+    backdateRunning('hf-000010', 120_000); // 已过 1 分钟硬超时 deadline
+    runner.state.taskDone = true;
+    runner.state.lastActivityAt = new Date().toISOString();
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000010')!.status).toBe('running');
+  });
+
+  it('bot task 未完成时硬超时照旧生效', async () => {
+    insertRunningBot('hf-000011');
+    backdateRunning('hf-000011', 120_000);
+    runner.state.taskDone = false;
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000011')!.status).toBe('expired');
+    expect(getHandoff(db, 'hf-000011')!.error).toBe('hard timeout');
+  });
+
+  it('bot 驻留期空闲 TTL：无活动超 idleTtl → expired', async () => {
+    insertRunningBot('hf-000012');
+    backdateRunning('hf-000012', 130 * 60_000);
+    runner.state.taskDone = true;
+    runner.state.lastActivityAt = new Date(Date.now() - 121 * 60_000).toISOString(); // > 120min idleTtl
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000012')!.status).toBe('expired');
+    expect(getHandoff(db, 'hf-000012')!.error).toBe('idle ttl');
+  });
+
+  it('bot 驻留期活跃续命：新活动 → 保持 running（进行中的轮次不被误杀）', async () => {
+    insertRunningBot('hf-000013');
+    backdateRunning('hf-000013', 3 * 3600_000); // 进 running 已 3 小时
+    runner.state.taskDone = true;
+    runner.state.lastActivityAt = new Date(Date.now() - 5 * 60_000).toISOString(); // 5 分钟前还在聊
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000013')!.status).toBe('running');
   });
 
   it('瞬断不误判：runner 不可达 + phase 查询抛错 → 保持 running（hf-f4da72 回归）', async () => {

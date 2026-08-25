@@ -14,6 +14,8 @@ export interface RunnerState {
   workspacePath?: string;
   lastError?: string;
   loading: boolean;
+  /** runner 控制面最近活动时间（ISO）；钉钉直达的会话活动由 healthz 从 session 文件 mtime 补齐 */
+  lastActivityAt?: string;
 }
 
 export const state: RunnerState = {
@@ -23,6 +25,11 @@ export const state: RunnerState = {
   ideReady: false,
   loading: false,
 };
+
+/** 控制面活动打点（/load / /bind / /snapshot / task 终态等）：bot 驻留期空闲 TTL 的 hub 侧判据 */
+export function touchActivity(): void {
+  state.lastActivityAt = new Date().toISOString();
+}
 
 const logs: SandboxEvent[] = [];
 

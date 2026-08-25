@@ -241,7 +241,8 @@ created → uploaded → queued → provisioning → running → packaging → d
 ```
 
 - `running` 中无 task 或 task 已完成的会话可长驻；空闲 TTL（默认 2h，按 last_active_at）到期 → packaging → expired
-- 带 task 的 handoff 另受 timeoutMinutes 硬超时约束，到期 → packaging → expired（已产出成果仍打返回包）
+- 带 task 的 handoff 受 timeoutMinutes 硬超时约束，但仅适用于任务执行期（task 未完成）；taskDone 后时钟停摆
+- bot 驻留期（含 task 完成后）改按 runner 上报的活跃度（控制面事件 ∨ session jsonl mtime）计空闲 TTL，活跃即续命（hf-0dc37c）
 
 ### 4.2 hub-server REST API（前缀 `/api`；除 auth 外均需 `Authorization: Bearer <jwt>`）
 
