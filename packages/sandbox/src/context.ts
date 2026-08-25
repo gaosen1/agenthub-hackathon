@@ -94,8 +94,14 @@ export function applyCloudModelSettings(settings: Record<string, unknown>): void
   settings['security'] = { auth: { selectedType: 'openai' } };
 }
 
-/** web 模式：还原后仅覆盖模型配置，其余本地设置保持不动 */
-export async function writeCloudModelConfig(home: string): Promise<void> {
+/** 无人值守场景禁用的交互工具：ask_user_question 的 permission 是「收集答案」而非安全确认，
+ * yolo 也拦不住（qwen 源码明示 always requires user confirmation）；云端无人应答会挂起 5 分钟后
+ * 静默结束还报成功（hf-0dc37c 事故），直接从工具列表剔除，模型转为自主决策或普通文本提问 */
+const UNATTENDED_EXCLUDE_TOOLS = ['ask_user_question'];
+
+/** web 模式：还原后仅覆盖模型配置，其余本地设置保持不动；
+ * unattended=true（带 task 的接力/bot 常驻）额外剔除交互式提问工具 */
+export async function writeCloudModelConfig(home: string, opts?: { unattended?: boolean }): Promise<void> {
   const settingsPath = join(home, 'settings.json');
   let settings: Record<string, unknown> = {};
   try {
@@ -106,6 +112,13 @@ export async function writeCloudModelConfig(home: string): Promise<void> {
   applyCloudModelSettings(settings);
   // 本地 hooks 引用宿主机绝对路径，容器内不存在会 Warn 混入模型输出（与 writeChannelsConfig 同因）
   delete settings['hooks'];
+  if (opts?.unattended) {
+    const tools = (settings['tools'] as Record<string, unknown> | undefined) ?? {};
+    const exclude = new Set(Array.isArray(tools['exclude']) ? (tools['exclude'] as string[]) : []);
+    for (const t of UNATTENDED_EXCLUDE_TOOLS) exclude.add(t);
+    tools['exclude'] = [...exclude];
+    settings['tools'] = tools;
+  }
   await fs.mkdir(home, { recursive: true });
   await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
 }

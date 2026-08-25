@@ -81,6 +81,17 @@ describe('writeCloudModelConfig（web 模式模型覆盖）', () => {
     expect(s.modelProviders.openai[0].envKey).toBe('OPENAI_API_KEY');
     expect(s.security).toEqual({ auth: { selectedType: 'openai' } });
     expect(s.hooks).toBeUndefined(); // 本地 hooks 不落入云端配置
+    expect(s.tools).toBeUndefined(); // 默认不干预工具列表（交互场景保留 ask_user_question）
+  });
+
+  it('unattended：剔除 ask_user_question，保留既有 exclude 条目', async () => {
+    await fs.writeFile(
+      join(home, 'settings.json'),
+      JSON.stringify({ tools: { exclude: ['run_shell_command'] } }),
+    );
+    await writeCloudModelConfig(home, { unattended: true });
+    const s = JSON.parse(await fs.readFile(join(home, 'settings.json'), 'utf8'));
+    expect(s.tools.exclude).toEqual(expect.arrayContaining(['run_shell_command', 'ask_user_question']));
   });
 });
 

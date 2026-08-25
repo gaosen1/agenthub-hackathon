@@ -335,8 +335,8 @@ export function buildRunner(): FastifyInstance {
 
         // web 模式：serve 先起（侧栏/web-shell 立即可连），任务经 serve ACP 流式执行（盲点修复）；
         // serve 路径不可用时回退 headless 续跑
-        // 覆盖还原的本地模型配置（可能指向办公网端点，Pod 不可达）
-        await writeCloudModelConfig(qwenHome());
+        // 覆盖还原的本地模型配置（可能指向办公网端点，Pod 不可达）；带 task 的接力属无人值守，剔除交互式提问工具
+        await writeCloudModelConfig(qwenHome(), { unattended: Boolean(body.task) });
         await startServe({ mode: 'web', workspacePath: manifest.workspacePath, serveToken });
         await waitServeReady('web');
         state.serveReady = true;
@@ -591,8 +591,9 @@ if (process.env.VITEST === undefined) {
             await exec('git', ['init', '-b', 'main', workspacePath]).catch(() => undefined);
             const { writeChannelsConfig } = await import('./context.js');
             await writeChannelsConfig(qwenHome(), botName, workspacePath);
-            // bot 无 /load：模型配置同样须用注入的 OPENAI_* env 覆盖，否则 qwen 落默认提供商挂起（唤醒 #2 超时事故）
-            await writeCloudModelConfig(qwenHome());
+            // bot 无 /load：模型配置同样须用注入的 OPENAI_* env 覆盖，否则 qwen 落默认提供商挂起（唤醒 #2 超时事故）；
+            // 钉钉侧无法回答交互式提问（permission 挂起 5 分钟静默失败，hf-0dc37c 事故），剔除 ask_user_question
+            await writeCloudModelConfig(qwenHome(), { unattended: true });
             botWorkspace = { workspacePath, wsHash: daemonWsHash(workspacePath), botName };
             appendLog('sys', `bot auto-start: channels config written for ${botName}`);
             await startServe({ mode: 'bot', workspacePath, botName });
