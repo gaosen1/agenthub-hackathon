@@ -246,6 +246,7 @@ describe('worker 全链路', () => {
 
   it('bot task 未完成时不适用空闲 TTL：长静默操作合法，由 1440min 静默容忍负责（hf-5cb6ee 回归）', async () => {
     insertRunningBot('hf-000015');
+    db.prepare('UPDATE handoffs SET timeout_minutes=1440 WHERE id=?').run('hf-000015'); // 默认 24h 静默容忍
     backdateRunning('hf-000015', 50 * 60_000);
     runner.state.taskDone = false; // 任务还在跑
     runner.state.lastActivityAt = new Date(Date.now() - 40 * 60_000).toISOString(); // 超 30min idleTtl 但 < 1440min
