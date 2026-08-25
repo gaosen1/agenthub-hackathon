@@ -50,16 +50,16 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
 
   // 入口可能中途死掉（hub 重启/port-forward 瞬断），首探也可能撞上沙箱冷启动未就绪：
   // 周期重取 shell-url，reachable 翻转或 url 变化即更新（旧条件漏掉同 url 的 false→true 翻转，
-  // 会永远卡在「不可直达」占位）
+  // 会永远卡在「不可直达」占位）；未达时加密轮询（冷启动窗口尽快翻转）
   useEffect(() => {
     if (!isRunning) return;
     const timer = setInterval(() => {
       fetchShellUrl(detail.id)
         .then((r) => setShell((prev) => (prev && prev.url === r.url && prev.reachable === r.reachable ? prev : r)))
         .catch(() => undefined);
-    }, 8_000);
+    }, shell?.reachable ? 8_000 : 3_000);
     return () => clearInterval(timer);
-  }, [detail.id, isRunning]);
+  }, [detail.id, isRunning, shell?.reachable]);
 
   const startResize = (e: ReactPointerEvent) => {
     e.preventDefault();
@@ -106,7 +106,7 @@ export function ChatPanel({ detail }: { detail: HandoffDetail }) {
             ? `云端会话不可用：${err}`
             : shell
               ? isRunning
-                ? 'Web Shell 不可直达：需 hub 与浏览器同机（port-forward），或 hub 部署在集群内'
+                ? 'Web Shell 启动中/暂不可达，正在重试（沙箱冷启动约需数秒；若持续如此：需 hub 与浏览器同机或 hub 部署在集群内）'
                 : '该 handoff 无返回包，Web Shell 回放不可用'
               : '正在连接云端会话…'}
         </div>
