@@ -772,6 +772,19 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return reply.status(204).send();
   });
 
+  // 显式唤醒（镜像滚动升级/沙箱重建运维）：死亡/过期实例拉新，存活直接复用（worker.wakeBot 单飞语义）
+  app.post('/api/bots/:id/wake', async (req, reply) => {
+    const bot = ownBot(req);
+    if (!sandbox) throw fail(502, 'ERR_K8S', 'sandbox backend not configured');
+    try {
+      const pod = await provisionBot(bot.id);
+      return reply.send({ podName: pod });
+    } catch (e) {
+      db.prepare("UPDATE bots SET status='error' WHERE id=? AND status != 'deleted'").run(bot.id);
+      throw fail(502, 'ERR_K8S', `bot wake failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
   // ── bot 唤醒看门人：沙箱死/过期时 hub 持兜底 Stream 接 @，唤醒后交棒沙箱原生 Stream ──
   const wakers = new Map<number, DingtalkStreamWaker>();
   const wakeBot = async (b: BotRow, m: DingBotMessage): Promise<void> => {
