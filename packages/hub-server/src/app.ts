@@ -611,6 +611,19 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     return base;
   };
 
+  /** IDE 目标 Pod 解析：bot 是常驻 Deployment，ACS 驱逐重建后 Pod 名变化，
+   * h.pod_name 会过期——按 label 动态定位实际 Pod（同 runnerOfBot）；web 直接用 pod_name */
+  const idePodNameOf = async (h: HandoffRow): Promise<string | null> => {
+    if (!h.pod_name) return null;
+    if (h.kind === 'bot' && h.bot_id) {
+      const resolved = await needSandbox()
+        .orchestrator.findPodNameByLabel({ 'agenthub/bot': String(h.bot_id) })
+        .catch(() => undefined);
+      if (resolved) return resolved;
+    }
+    return h.pod_name;
+  };
+
   app.post('/api/handoffs/:id/ide/ensure', async (req, reply) => {
     const { uid } = requireAuth(req);
     const h = ownHandoff(req);
@@ -618,7 +631,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const sb = needSandbox();
     if (!h.pod_name) throw fail(409, 'ERR_NOT_READY', 'sandbox not provisioned');
     // runner 隧道同样会被瞬断污染：探针失败即 invalidate 重建，最多 3 轮（同 shell-url 模式）
-    const pod = { namespace: sb.namespace, podName: h.pod_name };
+    const pod = { namespace: sb.namespace, podName: (await idePodNameOf(h))! };
     let status: RunnerIdeStatusResp | undefined;
     let lastErr: unknown;
     for (let i = 0; i < 3 && !status; i++) {
@@ -648,7 +661,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       if (!h || h.user_id !== uid) throw fail(404, 'ERR_NOT_FOUND', 'handoff not found');
       if (h.status !== 'running' || !h.pod_name) throw fail(409, 'ERR_NOT_READY', `handoff is ${h.status}`);
       const sb = needSandbox();
-      const upstreamBase = await ideTunnelOf(h.pod_name);
+      const upstreamBase = await ideTunnelOf((await idePodNameOf(h))!);
       const prefix = `/api/handoffs/${id}/ide`;
       const upstreamPath = req.url.slice(prefix.length) || '/';
       reply.hijack();
@@ -666,7 +679,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
     const uid = verifyIdeToken(req.headers, secret, tvOf);
     if (uid === null) return;
     const row = db
-      .prepare("SELECT id FROM handoffs WHERE user_id=? AND status='running' AND kind='web' AND pod_name IS NOT NULL ORDER BY updated_at DESC LIMIT 1")
+      .prepare("SELECT id FROM handoffs WHERE user_id=? AND status='running' AND pod_name IS NOT NULL ORDER BY updated_at DESC LIMIT 1")
       .get(uid) as { id: string } | undefined;
     if (!row) return;
     await reply.redirect(`/api/handoffs/${row.id}/ide${req.url}`, 302);
@@ -687,8 +700,11 @@ export function buildApp(opts: AppOptions): FastifyInstance {
       socket.destroy();
       return;
     }
-    ideTunnelOf(h.pod_name)
-      .then((base) => pipeUpgrade(req.headers, socket, head, base, m[2] || '/'))
+    idePodNameOf(h)
+      .then(async (podName) => {
+        if (!podName) throw new Error('sandbox not provisioned');
+        pipeUpgrade(req.headers, socket, head, await ideTunnelOf(podName), m[2] || '/');
+      })
       .catch(() => socket.destroy());
   });
 

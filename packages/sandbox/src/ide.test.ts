@@ -8,12 +8,16 @@ import { buildRunner } from './runner.js';
 import { ensureIde, ideDeps, ideStatus, resetIdeForTest } from './ide.js';
 
 /** 最小 ChildProcess 替身：只实现 ensureIde 用到的面 */
-function fakeChild(opts: { exitCode?: number | null; pid?: number } = {}): ChildProcess & { emitExit: (code: number) => void } {
+function fakeChild(opts: { exitCode?: number | null; pid?: number } = {}): ChildProcess & { emitExit: (code: number) => void; killed: boolean } {
   const handlers: Record<string, Array<(code: number) => void>> = {};
   const child = {
     pid: opts.pid ?? 4242,
     exitCode: opts.exitCode ?? null,
+    killed: false,
     unref: () => undefined,
+    kill: () => {
+      child.killed = true;
+    },
     on: (ev: string, fn: (code: number) => void) => {
       (handlers[ev] ??= []).push(fn);
     },
@@ -22,7 +26,7 @@ function fakeChild(opts: { exitCode?: number | null; pid?: number } = {}): Child
       for (const fn of handlers['exit'] ?? []) fn(code);
     },
   };
-  return child as unknown as ChildProcess & { emitExit: (code: number) => void };
+  return child as unknown as ChildProcess & { emitExit: (code: number) => void; killed: boolean };
 }
 
 beforeEach(() => {
@@ -89,5 +93,28 @@ describe('ensureIde', () => {
     expect(st.ready).toBe(false);
     expect(st.error).toMatch(/exited early/);
     expect(ideStatus().ready).toBe(false);
+  });
+
+  it('workspace 变更时重启 code-server 指向新目录（bot 常驻 Pod 切 handoff）', async () => {
+    const children: Array<ReturnType<typeof fakeChild>> = [];
+    ideDeps.spawn = ((_bin: string, args: string[]) => {
+      const c = fakeChild({ pid: 5000 + children.length });
+      children.push(c);
+      expect(args[args.length - 1]).toBe(children.length === 1 ? '/tmp/ws-a' : '/tmp/ws-b');
+      return c;
+    }) as unknown as typeof ideDeps.spawn;
+
+    const first = await ensureIde('/tmp/ws-a');
+    expect(first).toEqual({ ready: true, pid: 5000 });
+
+    const second = await ensureIde('/tmp/ws-b');
+    expect(second).toEqual({ ready: true, pid: 5001 });
+    expect(children).toHaveLength(2);
+    expect(children[0]!.killed).toBe(true);
+
+    // 新目录上再次调用仍幂等，不再 spawn
+    const third = await ensureIde('/tmp/ws-b');
+    expect(third.ready).toBe(true);
+    expect(children).toHaveLength(2);
   });
 });

@@ -18,6 +18,8 @@ const fakeSigner: OssSigner = {
 };
 
 class FakeOrchestrator implements PodOrchestrator {
+  /** label 查找返回的实际 Pod（模拟 bot Deployment 重建后 Pod 名变化） */
+  podByLabel: string | undefined;
   async createPod(_spec: SandboxPodSpec): Promise<string> {
     return _spec.podName;
   }
@@ -35,12 +37,15 @@ class FakeOrchestrator implements PodOrchestrator {
   }
   async deleteDeployment(_name: string): Promise<void> {}
   async findPodNameByLabel(_labels: Record<string, string>): Promise<string | undefined> {
-    return undefined;
+    return this.podByLabel;
   }
 }
 
 let db: DB;
 let app: FastifyInstance;
+let orch: FakeOrchestrator;
+/** connector.getBaseUrl 收到的 Pod 名，验证 label 解析结果真正被隧道使用 */
+let seenPods: string[];
 let runnerServer: Server;
 let ideServer: Server;
 let runnerUrl: string;
@@ -95,16 +100,21 @@ beforeEach(async () => {
   ideUrl = await listen(ideServer);
 
   db = openDb(':memory:');
+  seenPods = [];
   const connector: SandboxConnector = {
-    getBaseUrl: async (_pod: PodRef, port: number) => (port === 8080 ? runnerUrl : ideUrl),
+    getBaseUrl: async (pod: PodRef, port: number) => {
+      seenPods.push(pod.podName);
+      return port === 8080 ? runnerUrl : ideUrl;
+    },
     invalidate: () => undefined,
     dispose: async () => undefined,
   };
+  orch = new FakeOrchestrator();
   app = buildApp({
     db,
     signer: fakeSigner,
     secret: 'test-secret',
-    sandbox: { connector, orchestrator: new FakeOrchestrator(), namespace: 'agenthub' },
+    sandbox: { connector, orchestrator: orch, namespace: 'agenthub' },
   });
 
   // 造一个 running 的 web handoff（绕过 Worker，直接改库模拟云端已起 Pod）
@@ -158,6 +168,33 @@ describe('POST /api/handoffs/:id/ide/ensure', () => {
     });
     expect(res.statusCode).toBe(409);
     expect((res.json() as { error: { code: string } }).error.code).toBe('ERR_NOT_READY');
+  });
+
+  it('kind=bot 按 label 解析实际 Pod（Deployment 重建后 pod_name 已过期）', async () => {
+    orch.podByLabel = 'ah-bot-1-new';
+    db.prepare(
+      "INSERT INTO bots (user_id, name, client_id, client_secret_enc, pod_name, status, created_at) VALUES (1, 'mybot', 'ding-cid', 'enc', 'ah-bot-1-old', 'running', datetime('now'))",
+    ).run();
+    db.prepare("UPDATE handoffs SET kind='bot', bot_id=1, pod_name='ah-bot-1-old' WHERE id=?").run(hid);
+    seenPods = [];
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/handoffs/${hid}/ide/ensure`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(seenPods).toContain('ah-bot-1-new');
+    expect(seenPods).not.toContain('ah-bot-1-old');
+
+    // 反代同样命中新 Pod
+    seenPods = [];
+    const proxied = await app.inject({
+      method: 'GET',
+      url: `/api/handoffs/${hid}/ide/`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(proxied.statusCode).toBe(200);
+    expect(seenPods).toContain('ah-bot-1-new');
   });
 });
 

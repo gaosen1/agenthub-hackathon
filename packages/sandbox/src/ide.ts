@@ -18,6 +18,8 @@ export const codeServerBin = (): string => join(sharedDir(), 'tools', 'code-serv
 
 let proc: ChildProcess | undefined;
 let lastError: string | undefined;
+/** 存活中的 code-server 打开的工作区：bot 常驻 Pod 会随新 handoff 切换目录，变更时须重启指向新目录 */
+let openWorkspace: string | undefined;
 
 /** 依赖注入点：测试替换 spawn/探测实现，避免真起进程 */
 export const ideDeps = {
@@ -41,6 +43,7 @@ export function codeServerInstalled(): boolean {
 export function resetIdeForTest(): void {
   proc = undefined;
   lastError = undefined;
+  openWorkspace = undefined;
   state.ideReady = false;
 }
 
@@ -53,10 +56,18 @@ export function ideStatus(): RunnerIdeStatusResp {
   };
 }
 
-/** 幂等拉起 code-server 打开 workspacePath；已存活直接返回 ready */
+/** 幂等拉起 code-server 打开 workspacePath；已存活且目录未变直接返回 ready，
+ * 目录变更（bot 常驻 Pod 切 handoff）则重启指向新目录 */
 export async function ensureIde(workspacePath: string): Promise<RunnerIdeStatusResp> {
   const cur = ideStatus();
-  if (cur.ready) return cur;
+  if (cur.ready && openWorkspace === workspacePath) return cur;
+  if (cur.ready && proc) {
+    appendLog('sys', `workspace changed (${openWorkspace ?? '?'} -> ${workspacePath}), restarting code-server`);
+    proc.kill();
+    proc = undefined;
+    openWorkspace = undefined;
+    state.ideReady = false;
+  }
   if (!codeServerInstalled()) {
     lastError = 'code-server not installed on shared layer';
     return { ready: false, error: lastError };
@@ -83,6 +94,7 @@ export async function ensureIde(workspacePath: string): Promise<RunnerIdeStatusR
     appendLog(code === 0 ? 'sys' : 'err', `code-server exited (code ${code})`);
     if (proc === child) {
       proc = undefined;
+      openWorkspace = undefined;
       state.ideReady = false;
     }
   });
@@ -99,6 +111,7 @@ export async function ensureIde(workspacePath: string): Promise<RunnerIdeStatusR
     }
     if (await ideDeps.probeReady(IDE_PORT)) {
       state.ideReady = true;
+      openWorkspace = workspacePath;
       appendLog('ok', 'code-server ready');
       return { ready: true, ...(child.pid ? { pid: child.pid } : {}) };
     }

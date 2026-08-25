@@ -89,7 +89,7 @@ export function TaskDetail({ detail: t, onOpenPull }: Props) {
           </div>
         </div>
         <div className="d-actions">
-          {t.status === 'running' && t.kind === 'web' && dataSource === 'hub' && (
+          {t.status === 'running' && dataSource === 'hub' && (
             <Link className="btn" to={`/tasks/${t.id}/ide`} title="打开云端工作区的 Web IDE（code-server）">
               <i className="fa-solid fa-code" /> 打开 IDE
             </Link>
