@@ -45,9 +45,16 @@ export function TasksView() {
   const currentId = id ?? null;
   const { data: detail } = useHandoffDetail(currentId);
 
-  // URL 没指定任务，或指定的任务已不在列表里（被清理/换用户）→ 落到第一个
+  // 列表已加载且当前选中任务不在其中（被删除/清理/列表空）→ 回列表页：
+  // react-query 在 404 后仍保留旧 detail，不跳走会渲染幽灵详情 + 404 轮询循环（hf-9f3a2c 事故）
+  const listLoaded = listData !== undefined;
+  if (listLoaded && currentId !== null && !items.some((i) => i.id === currentId)) {
+    return <Navigate to="/tasks" replace />;
+  }
+
+  // URL 没指定任务 → 落到第一个
   const first = items[0];
-  if (first && (currentId === null || !items.some((i) => i.id === currentId))) {
+  if (first && currentId === null) {
     return <Navigate to={`/tasks/${first.id}`} replace />;
   }
 
