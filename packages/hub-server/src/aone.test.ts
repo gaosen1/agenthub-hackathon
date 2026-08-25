@@ -35,6 +35,7 @@ function fakeSdk() {
     SandboxManager: {
       create: async () => ({
         getSandboxInfo: async (id: string) => {
+          if (ctl.managerError) throw ctl.managerError;
           if (!created.some((_, i) => `sb-${i + 1}` === id)) throw new Error('not found');
           return { status: { state: states.get(id) ?? 'Running' } };
         },
@@ -42,7 +43,8 @@ function fakeSdk() {
       }),
     },
   };
-  return { sdk, created, killed, states };
+  const ctl: { managerError?: Error } = {};
+  return { sdk, created, killed, states, ctl };
 }
 
 const cfg = { apiKey: 'k', image: 'reg/img:1', entrypoint: 'cd /app && exec node dist/runner.js', timeoutSeconds: 3600 };
@@ -74,6 +76,13 @@ describe('AoneOrchestrator', () => {
     states.set(id, 'Failed');
     expect(await orch.getPodPhase(id)).toBe('failed');
     expect(await orch.getPodPhase('nope')).toBe('gone');
+  });
+
+  it('getPodPhase 查询瞬断（非 not found）抛错不判 gone（hf-306082 误判回归）', async () => {
+    const { sdk, ctl } = fakeSdk();
+    const orch = new AoneOrchestrator(cfg, sdk);
+    ctl.managerError = new Error('api server timeout');
+    await expect(orch.getPodPhase('sb-x')).rejects.toThrow('timeout');
   });
 
   it('findPodNameByLabel 按 label 命中', async () => {

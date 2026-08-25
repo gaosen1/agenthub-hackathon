@@ -140,7 +140,16 @@ export class AoneOrchestrator implements PodOrchestrator {
       const st = info?.status?.state;
       return (st && STATE_TO_PHASE[st]) || 'pending';
     }
-    const info = await (await this.mgr()).getSandboxInfo(name).catch(() => undefined);
+    // 区分「实例确不存在」（not found → gone）与「查询瞬断」（抛错，上层保留状态下轮重试）：
+    // 一律吞错返 gone 会把活沙箱上的 running handoff 误判 pod lost（hf-306082 事故）
+    let info: { status?: { state?: string } } | undefined;
+    try {
+      info = await (await this.mgr()).getSandboxInfo(name);
+    } catch (e) {
+      const msg = (e instanceof Error ? e.message : String(e)).toLowerCase();
+      if (msg.includes('not found') || msg.includes('not exist')) return 'gone';
+      throw e;
+    }
     if (!info?.status?.state) return 'gone';
     return STATE_TO_PHASE[info.status.state] ?? 'pending';
   }

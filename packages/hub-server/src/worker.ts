@@ -174,7 +174,8 @@ export class Worker {
     const b = getBot(this.db, botId);
     if (!b) throw new Error(`bot ${botId} not found`);
     if (b.pod_name) {
-      const phase = await this.orchestrator.getPodPhase(b.pod_name).catch(() => 'failed');
+      // 查询失败按 pending 保守处理：瞬断时误判 failed 会先删活实例再重建（双沙箱互抢 stream）
+      const phase = await this.orchestrator.getPodPhase(b.pod_name).catch(() => 'pending' as PodPhase);
       if (phase === 'ready' || phase === 'pending') return b.pod_name;
       // 死实例先清再建：不清会累积孤儿沙箱，同 clientId 互抢钉钉 stream
       // （多沙箱抢流事故：DM 落旧沙箱回旧上下文、新沙箱收不到群消息）
