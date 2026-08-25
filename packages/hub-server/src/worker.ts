@@ -451,9 +451,11 @@ export class Worker {
           this.enterPackaging(h, 'expired', 'idle ttl');
           continue;
         }
-        // bot 驻留期（含 task 完成后）：钉钉消息直达 daemon，hub 看不见，活跃度由 runner healthz 上报
-        // （控制面打点 ∨ session jsonl mtime）；活跃即续命，进行中的轮次不会被误杀
-        if (h.kind === 'bot') {
+        // bot 驻留期（task 已完成或无 task）：钉钉消息直达 daemon，hub 看不见，活跃度由 runner healthz 上报
+        // （控制面打点 ∨ session jsonl mtime）；活跃即续命，进行中的轮次不会被误杀。
+        // 注意：task 未完成时不适用 30min 空闲 TTL——长静默操作（构建/依赖安装）合法，
+        // 任务期卡死检测由 1440min 静默容忍负责（hf-5cb6ee 被 idle TTL 误杀事故）
+        if (h.kind === 'bot' && (!h.task || health.taskDone)) {
           const basis = actSafe > 0 ? Math.max(actSafe, runningSinceMs ?? 0) : runningSinceMs;
           if (basis && Date.now() - basis > idleTtlMs) {
             this.enterPackaging(h, 'expired', 'idle ttl');

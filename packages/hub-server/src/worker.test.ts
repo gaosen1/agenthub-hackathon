@@ -244,6 +244,15 @@ describe('worker 全链路', () => {
     expect(getHandoff(db, 'hf-000012')!.error).toBe('idle ttl');
   });
 
+  it('bot task 未完成时不适用空闲 TTL：长静默操作合法，由 1440min 静默容忍负责（hf-5cb6ee 回归）', async () => {
+    insertRunningBot('hf-000015');
+    backdateRunning('hf-000015', 50 * 60_000);
+    runner.state.taskDone = false; // 任务还在跑
+    runner.state.lastActivityAt = new Date(Date.now() - 40 * 60_000).toISOString(); // 超 30min idleTtl 但 < 1440min
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000015')!.status).toBe('running');
+  });
+
   it('bot 驻留期活跃续命：新活动 → 保持 running（进行中的轮次不被误杀）', async () => {
     insertRunningBot('hf-000013');
     backdateRunning('hf-000013', 3 * 3600_000); // 进 running 已 3 小时
