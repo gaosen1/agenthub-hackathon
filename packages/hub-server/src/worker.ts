@@ -146,6 +146,14 @@ export class Worker {
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
+    // 看门狗：某个 SDK/网络调用无超时挂死时，ticking 锁不释放会令调度器永久停摆
+    // （hf-9f3a2c 事故：queued 永不推进）。超时强制解锁，挂死的旧 tick 沦为后台残影，
+    // 下一轮 interval 接管（状态机幂等，双跑安全）
+    const watchdog = setTimeout(() => {
+      this.ticking = false;
+      console.error('[worker] tick watchdog: tick exceeded 60s, releasing scheduler lock');
+    }, 60_000);
+    watchdog.unref?.();
     try {
       await this.handleQueued();
       await this.handleProvisioning();
@@ -154,6 +162,7 @@ export class Worker {
       // S18：状态变更通知单点驱动，失败不影响主流程
       await this.notifier?.notifyPending().catch(() => undefined);
     } finally {
+      clearTimeout(watchdog);
       this.ticking = false;
     }
   }
