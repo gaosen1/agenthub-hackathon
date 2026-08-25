@@ -54,7 +54,7 @@ program
   .option('--no-include-untracked', '快照不含未跟踪文件（缺省含，遵循 .gitignore）')
   .option('--bot [name]', '推到常驻钉钉机器人 sandbox；省略值时用你唯一的 bot')
   .option('--chat <chatId>', '绑定到指定钉钉群（配合 --bot）')
-  .option('--timeout <min>', '任务接力硬超时分钟数', '30')
+  .option('--timeout <min>', '任务接力硬超时分钟数（仅约束执行期，有活动自动续命）', '1440')
   .action(async (opts) => {
     try {
       await runPush(opts);

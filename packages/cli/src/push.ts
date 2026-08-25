@@ -70,7 +70,7 @@ export async function runPush(opts: PushOptions): Promise<void> {
     kind: opts.bot ? 'bot' : 'web',
     botId,
     bindChatId: opts.chat,
-    timeoutMinutes: opts.timeout ? Number(opts.timeout) : 30,
+    timeoutMinutes: opts.timeout ? Number(opts.timeout) : 1440,
     // S19 依赖缓存：lockfile 哈希随 handoff 上报，worker 与 OSS sidecar 比对
     ...(computeLockHash(workspacePath) ? { depsLockHash: computeLockHash(workspacePath) } : {}),
   };

@@ -94,8 +94,8 @@ export class Worker {
   /** 面板策略卡（S9）：真实配置，不是前端重述文案 */
   policy(): SandboxPolicy {
     return {
-      defaultTimeoutMinutes: 30,
-      idleTtlMinutes: this.cfg.idleTtlMinutes ?? 120,
+      defaultTimeoutMinutes: 1440,
+      idleTtlMinutes: this.cfg.idleTtlMinutes ?? 30,
       taskLingerMinutes: Number(process.env.TASK_LINGER_MINUTES ?? 30),
       orphanIntervalMs: this.orphanIntervalMs,
       workerIntervalMs: this.workerIntervalMs,
@@ -404,7 +404,7 @@ export class Worker {
 
   // running：搬运日志、检测 task 完成 / 硬超时 / 空闲 TTL
   private async handleRunning(): Promise<void> {
-    const idleTtlMs = (this.cfg.idleTtlMinutes ?? 120) * 60_000;
+    const idleTtlMs = (this.cfg.idleTtlMinutes ?? 30) * 60_000;
     for (const h of listByStatus(this.db, 'running')) {
       let runner: RunnerClient | undefined;
       try {
@@ -424,9 +424,17 @@ export class Worker {
         // 旧逻辑以进 running 起算一刀切，任务完成后的群聊追问在 deadline 被连坐砍断（hf-0dc37c 事故）
         const runningSince = statusEnteredAt(this.db, h.id, 'running');
         const runningSinceMs = runningSince ? Date.parse(runningSince) : undefined;
-        if (h.task && !health.taskDone && runningSinceMs && Date.now() - runningSinceMs > h.timeout_minutes * 60_000) {
-          this.enterPackaging(h, 'expired', 'hard timeout');
-          continue;
+        // timeoutMinutes 语义＝最长静默容忍，不是任务寿命上限：以「进 running 与最近活动的较晚者」起算，
+        // 活跃任务（含 24h+ 夜间长任务）持续续命永不撞墙钟；阈值只在无产出静默时充当卡死检测。
+        // 容忍度设得宽是因为长静默操作（大型构建/依赖安装）合法；老 runner 不上报活跃度时退化为纯墙钟
+        const actMs = health.lastActivityAt ? Date.parse(health.lastActivityAt) : NaN;
+        const actSafe = Number.isFinite(actMs) ? Math.min(actMs, Date.now()) : 0;
+        if (h.task && !health.taskDone && runningSinceMs) {
+          const basis = Math.max(runningSinceMs, actSafe);
+          if (Date.now() - basis > h.timeout_minutes * 60_000) {
+            this.enterPackaging(h, 'expired', 'hard timeout');
+            continue;
+          }
         }
         // 空闲 TTL（web 交互，无 task）
         if (h.kind === 'web' && !h.task && h.last_active_at && Date.now() - Date.parse(h.last_active_at) > idleTtlMs) {
@@ -436,8 +444,7 @@ export class Worker {
         // bot 驻留期（含 task 完成后）：钉钉消息直达 daemon，hub 看不见，活跃度由 runner healthz 上报
         // （控制面打点 ∨ session jsonl mtime）；活跃即续命，进行中的轮次不会被误杀
         if (h.kind === 'bot') {
-          const actMs = health.lastActivityAt ? Date.parse(health.lastActivityAt) : NaN;
-          const basis = Number.isFinite(actMs) ? Math.max(actMs, runningSinceMs ?? 0) : runningSinceMs;
+          const basis = actSafe > 0 ? Math.max(actSafe, runningSinceMs ?? 0) : runningSinceMs;
           if (basis && Date.now() - basis > idleTtlMs) {
             this.enterPackaging(h, 'expired', 'idle ttl');
             continue;

@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS handoffs (
   ws_hash TEXT NOT NULL,
   session_id TEXT NOT NULL,
   task TEXT,
-  timeout_minutes INTEGER NOT NULL DEFAULT 30,
+  timeout_minutes INTEGER NOT NULL DEFAULT 1440,
   status TEXT NOT NULL,
   kind TEXT NOT NULL,
   bot_id INTEGER REFERENCES bots(id),

@@ -67,8 +67,8 @@ const newToken = () => randomBytes(24).toString('base64url');
 
 /** 未配置编排时的缺省策略：与实现一致的默认值，面板照样渲染（S9） */
 const defaultPolicy = (): SandboxPolicy => ({
-  defaultTimeoutMinutes: 30,
-  idleTtlMinutes: 120,
+  defaultTimeoutMinutes: 1440,
+  idleTtlMinutes: 30,
   taskLingerMinutes: Number(process.env.TASK_LINGER_MINUTES ?? 30),
   orphanIntervalMs: DEFAULT_ORPHAN_INTERVAL_MS,
   workerIntervalMs: DEFAULT_WORKER_INTERVAL_MS,

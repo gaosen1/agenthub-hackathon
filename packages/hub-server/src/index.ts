@@ -63,7 +63,7 @@ if (process.env.SANDBOX_BACKEND === 'aone') {
       orchestrator,
       connector,
       signer,
-      { namespace: 'aone', idleTtlMinutes: Number(process.env.SANDBOX_IDLE_TTL_MINUTES ?? 120) },
+      { namespace: 'aone', idleTtlMinutes: Number(process.env.SANDBOX_IDLE_TTL_MINUTES ?? 30) },
       SECRET,
       new Notifier(db, SECRET),
     );

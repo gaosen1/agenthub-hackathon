@@ -225,6 +225,15 @@ describe('worker 全链路', () => {
     expect(getHandoff(db, 'hf-000011')!.error).toBe('hard timeout');
   });
 
+  it('执行期活跃度续命：长任务还在产出就不撞墙钟（夜间 24h 无人值守场景）', async () => {
+    insertRunningBot('hf-000014');
+    backdateRunning('hf-000014', 120_000); // 已过 1 分钟墙钟 deadline
+    runner.state.taskDone = false;
+    runner.state.lastActivityAt = new Date(Date.now() - 30_000).toISOString(); // 30s 前还在干活
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000014')!.status).toBe('running');
+  });
+
   it('bot 驻留期空闲 TTL：无活动超 idleTtl → expired', async () => {
     insertRunningBot('hf-000012');
     backdateRunning('hf-000012', 130 * 60_000);

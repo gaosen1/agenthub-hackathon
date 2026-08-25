@@ -240,8 +240,8 @@ created → uploaded → queued → provisioning → running → packaging → d
                                    └────────────┴──→ failed / cancelled / expired
 ```
 
-- `running` 中无 task 或 task 已完成的会话可长驻；空闲 TTL（默认 2h，按 last_active_at）到期 → packaging → expired
-- 带 task 的 handoff 受 timeoutMinutes 硬超时约束，但仅适用于任务执行期（task 未完成）；taskDone 后时钟停摆
+- 生命周期全程活跃度驱动：有活动不回收；`running` 中无 task 或 task 已完成的会话空闲 TTL（默认 30min，env SANDBOX_IDLE_TTL_MINUTES 可调）到期 → packaging → expired
+- 带 task 的 handoff 的 timeoutMinutes（缺省 1440 分钟）语义为最长静默容忍而非寿命上限：仅适用于任务执行期（task 未完成），以「进 running 与最近活动时间的较晚者」起算，活跃任务（含 24h+ 长任务）持续续命；taskDone 后时钟停摆
 - bot 驻留期（含 task 完成后）改按 runner 上报的活跃度（控制面事件 ∨ session jsonl mtime）计空闲 TTL，活跃即续命（hf-0dc37c）
 
 ### 4.2 hub-server REST API（前缀 `/api`；除 auth 外均需 `Authorization: Bearer <jwt>`）

@@ -278,7 +278,7 @@ describe('GET /api/sandboxes（S9）', () => {
     expect(body.template!.resources).toEqual({ cpu: '2', memory: '4Gi' });
     expect(body.template!.ports).toEqual({ runner: 8080, serve: 8081, shellProxy: 8082, ide: 8083 });
     expect(body.template!.toolchain).toContain('git');
-    expect(body.policy.defaultTimeoutMinutes).toBe(30);
+    expect(body.policy.defaultTimeoutMinutes).toBe(1440);
     expect(body.policy.orphanIntervalMs).toBe(600_000);
   });
 
@@ -335,7 +335,7 @@ describe('GET /api/sandboxes（S9）', () => {
     expect(body.configured).toBe(false);
     expect(body.template).toBeNull();
     expect(body.stats.templates).toBe(0);
-    expect(body.policy.idleTtlMinutes).toBe(120);
+    expect(body.policy.idleTtlMinutes).toBe(30);
     await bare.close();
   });
 });

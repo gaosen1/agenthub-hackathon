@@ -153,9 +153,9 @@ describe('zod schema 合法/非法样本（D1 验收）', () => {
     });
   }
 
-  it('HandoffManifest: timeoutMinutes 缺省填充 30', () => {
+  it('HandoffManifest: timeoutMinutes 缺省填充 1440（24h 夜间长任务）', () => {
     const { timeoutMinutes: _omit, ...rest } = validManifest;
     const parsed = HandoffManifestSchema.parse(rest);
-    assert.equal(parsed.timeoutMinutes, 30);
+    assert.equal(parsed.timeoutMinutes, 1440);
   });
 });

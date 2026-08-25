@@ -54,7 +54,8 @@ export const HandoffManifestSchema = z.object({
   sessionId: z.string().min(1),
   /** 接力指令；缺省 = 交互接力 */
   task: z.string().optional(),
-  timeoutMinutes: z.number().int().positive().default(30),
+  /** 任务接力硬超时分钟数（仅约束任务执行期，有活动即续命）；缺省 24h 覆盖夜间无人值守长任务 */
+  timeoutMinutes: z.number().int().positive().default(1440),
   qwenVersion: z.string(),
   createdAt: z.string(),
   /** 仅 direction=pull（返回包）时存在 */

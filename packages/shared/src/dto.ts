@@ -59,7 +59,7 @@ export const CreateHandoffReqSchema = z.object({
   kind: HandoffKindSchema,
   botId: z.number().optional(),
   bindChatId: z.string().optional(),
-  timeoutMinutes: z.number().int().positive().default(30),
+  timeoutMinutes: z.number().int().positive().default(1440),
   /** S19 依赖缓存：本地 lockfile 哈希，worker 与 OSS sidecar 比对决定是否下发缓存 */
   depsLockHash: z.string().optional(),
 });
