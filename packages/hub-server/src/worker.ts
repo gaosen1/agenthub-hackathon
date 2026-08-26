@@ -521,9 +521,25 @@ export class Worker {
       } finally {
         this.logCursors.delete(h.id);
         if (h.kind === 'web') await this.safeDeletePod(h, reasonOfTarget(target));
-        else if (h.bot_id) this.db.prepare('UPDATE bots SET current_handoff_id=NULL WHERE id=? AND current_handoff_id=?').run(h.bot_id, h.id);
+        else if (h.bot_id) {
+          // bot handoff 终态 → 回收常驻沙箱：handoff 死后无人再跟踪活跃度，留着实例永久泄漏，
+          // 且面板呈现「handoff 已超时但沙箱仍运行中」的矛盾（hf-5be198 事故）；
+          // 状态由周期快照保留，下次钉钉消息/push 由 waker/provisionBot 按需唤醒
+          await this.reclaimBotPod(h, reasonOfTarget(target));
+          this.db.prepare('UPDATE bots SET current_handoff_id=NULL WHERE id=? AND current_handoff_id=?').run(h.bot_id, h.id);
+        }
       }
     }
+  }
+
+  /** bot 常驻沙箱回收：label 解析真实实例名（Deployment 重建后 pod 名变），删实例 + 落回收记录 + 清 bots.pod_name */
+  private async reclaimBotPod(h: HandoffRow, reason: ReclaimReason): Promise<void> {
+    const pod = await this.resolvePodName(h).catch(() => h.pod_name);
+    if (!pod) return;
+    await this.connector.dispose(this.podRef(pod)).catch(() => undefined);
+    await this.orchestrator.deletePod(pod).catch(() => undefined);
+    recordSandboxReclaim(this.db, pod, reclaimStatus(reason), reason, h.error ?? undefined);
+    if (h.bot_id) this.db.prepare('UPDATE bots SET pod_name=NULL WHERE id=? AND pod_name=?').run(h.bot_id, pod);
   }
 
   /** 触发交互式 handoff 的收尾打包（pull-intent 调用），返回是否已发起 */

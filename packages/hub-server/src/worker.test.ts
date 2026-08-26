@@ -8,7 +8,7 @@ import type { OssSigner } from './oss.js';
 import type { PodOrchestrator, PodPhase, SandboxPodSpec } from './k8s.js';
 import type { PodRef, SandboxConnector } from './connector.js';
 import { Worker } from './worker.js';
-import { getHandoff, nowIso, recordEvent } from './store.js';
+import { getHandoff, nowIso, recordEvent, recordSandboxCreate, recordSandboxReady } from './store.js';
 
 // ── fakes ────────────────────────────────────────────────
 class FakeOrchestrator implements PodOrchestrator {
@@ -313,5 +313,28 @@ describe('回收与恢复', () => {
     // orch 中没有这个 pod → gone
     await worker.recover();
     expect(getHandoff(db, 'hf-000006')!.status).toBe('failed');
+  });
+
+  it('bot handoff 终态回收常驻沙箱：不留「handoff expired 但沙箱 running」矛盾（hf-5be198）', async () => {
+    db.prepare(
+      "INSERT INTO bots (user_id, name, client_id, client_secret_enc, pod_name, status, created_at) VALUES (1,'mybot','c','e','ah-bot-x','running','t')",
+    ).run();
+    recordSandboxCreate(db, { podName: 'ah-bot-x', userId: 1, kind: 'bot', image: 'img', namespace: 'agenthub', botId: 1 });
+    recordSandboxReady(db, 'ah-bot-x');
+    insertHandoff(db, { id: 'hf-000016', task: 't', kind: 'bot', timeout: 1440, status: 'running', botId: 1 });
+    db.prepare('UPDATE handoffs SET pod_name=? WHERE id=?').run('ah-bot-x', 'hf-000016');
+    orch.pods.set('ah-bot-x', 'ready');
+    db.prepare("UPDATE handoff_events SET at=? WHERE handoff_id=? AND payload='running'").run(
+      new Date(Date.now() - 130 * 60_000).toISOString(), 'hf-000016',
+    );
+    runner.state.taskDone = true;
+    runner.state.lastActivityAt = new Date(Date.now() - 121 * 60_000).toISOString(); // > 120min idleTtl → 驻留期到期
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000016')!.status).toBe('expired');
+    expect(orch.pods.has('ah-bot-x')).toBe(false); // 实例已回收，下次消息由 waker 唤醒
+    expect((db.prepare('SELECT pod_name FROM bots WHERE id=1').get() as { pod_name: string | null }).pod_name).toBeNull();
+    const sb = db.prepare("SELECT status, reclaim_reason FROM sandboxes WHERE pod_name='ah-bot-x'").get() as { status: string; reclaim_reason: string };
+    expect(sb.status).toBe('reclaimed');
+    expect(sb.reclaim_reason).toBe('expired');
   });
 });
