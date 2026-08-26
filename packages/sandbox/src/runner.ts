@@ -200,7 +200,9 @@ async function lastActivityAt(): Promise<string | undefined> {
 }
 
 let manifest: HandoffManifest | undefined;
-let serveToken: string | undefined;
+// 裸 bot（无 /load）场景：daemon 的 Bearer 凭证就是编排层注入的 QWEN_SERVER_TOKEN（startServe 透传 env），
+// 直接作为缺省值——否则 waker 唤醒时 runPromptCollect 无 token 连 daemon 被 401 拒（唤醒失败 acp-prompt 500 事故）
+let serveToken: string | undefined = process.env.QWEN_SERVER_TOKEN || undefined;
 let botWorkspace: { workspacePath: string; wsHash: string; botName: string } | undefined;
 let startedAt = Date.now();
 
