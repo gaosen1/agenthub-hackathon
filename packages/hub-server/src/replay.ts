@@ -144,11 +144,20 @@ async function restart(): Promise<void> {
   await exited;
 }
 
-/** 从 OSS 返回包还原 session jsonl 到 replay serve 的 projects 分片目录；返回是否新还原（已存在则 false） */
-async function restoreSession(st: ReplayState, sessionId: string, signGet: (key: string) => Promise<string>, outputOssKey: string | null): Promise<boolean> {
+/** 从 OSS 返回包还原 session jsonl 到 replay serve 的 projects 分片目录；返回是否新还原（已存在且新鲜则 false）。
+ * bot 场景同一 session 跨 handoff 复用追加（session resume），本地缓存落后于最新返回包时
+ * 会渲染陈旧聊天（hf-5be198 事故：显示 8/23 老会话）——用 stamp 侧车记录已还原的返回包时刻，落后即重拉 */
+async function restoreSession(st: ReplayState, sessionId: string, signGet: (key: string) => Promise<string>, outputOssKey: string | null, outputUploadedAt?: string | null): Promise<boolean> {
   const dest = join(st.home, 'projects', wsSlug(st.workspace), 'chats', `${sessionId}.jsonl`);
-  if (existsSync(dest)) return false;
-  if (!outputOssKey) throw new Error('handoff has no output package');
+  const stampFile = `${dest}.stamp`;
+  if (existsSync(dest)) {
+    const prev = await fs.readFile(stampFile, 'utf8').catch(() => '');
+    // 无新时刻戳参照（老任务）或 stamp 匹配 → 缓存新鲜；不匹配（包更新过）→ 穿透重拉
+    if (!outputUploadedAt || prev === outputUploadedAt) return false;
+  } else if (!outputOssKey) {
+    throw new Error('handoff has no output package');
+  }
+  if (!outputOssKey) return false; // 目标存在但无包可拉（理论上不可达，防御）
   const url = await signGet(outputOssKey);
   const pkg = join(tmpdir(), `agenthub-replay-${sessionId}.tar.gz`);
   const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
@@ -175,6 +184,7 @@ async function restoreSession(st: ReplayState, sessionId: string, signGet: (key:
     // daemon 按 session 内部 cwd 过滤列表：重写为 replay workspace 才可见（回放只读，文件链接不要求存在）
     const raw = await fs.readFile(dest, 'utf8');
     await fs.writeFile(dest, raw.replace(/"cwd":"[^"]*"/g, `"cwd":"${st.workspace}"`));
+    if (outputUploadedAt) await fs.writeFile(stampFile, outputUploadedAt);
     return true;
   } finally {
     await fs.rm(stage, { recursive: true, force: true }).catch(() => undefined);
@@ -187,7 +197,7 @@ async function restoreSession(st: ReplayState, sessionId: string, signGet: (key:
  * 先 restore 后 ensure：无包任务不白起本地 serve。
  */
 export async function replayShellUrl(
-  h: { session_id: string; output_oss_key: string | null },
+  h: { session_id: string; output_oss_key: string | null; output_uploaded_at?: string | null },
   signGet: (key: string) => Promise<string>,
 ): Promise<string> {
   // 先判断包/文件存在性再起进程：无包任务不白起本地 serve
@@ -196,7 +206,7 @@ export async function replayShellUrl(
   const dest = join(home, 'projects', wsSlug(workspace), 'chats', `${h.session_id}.jsonl`);
   if (!existsSync(dest) && !h.output_oss_key) throw new Error('handoff has no output package');
   const st0 = await ensure();
-  const restored = await restoreSession(st0, h.session_id, signGet, h.output_oss_key);
+  const restored = await restoreSession(st0, h.session_id, signGet, h.output_oss_key, h.output_uploaded_at);
   // 新还原的 session 需重启 serve 才能进 routes（daemon 启动时 lazy-reload）
   const st = restored ? ((await restart()), await ensure()) : st0;
   return `http://127.0.0.1:${REPLAY_PROXY_PORT}/session/${encodeURIComponent(h.session_id)}#token=${st.token}`;
