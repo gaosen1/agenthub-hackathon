@@ -3,8 +3,13 @@
  * queued → 建 Pod → provisioning → runner /load → running → 完成/超时 → packaging → snapshot → 终态 → 回收
  * 另含：崩溃恢复扫描、孤儿 Pod 清理、空闲 TTL 与硬超时。
  */
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import type { HandoffStatus, SandboxPolicy } from '@agenthub/shared';
+import { rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import type { HandoffManifest, HandoffStatus, SandboxPolicy } from '@agenthub/shared';
 import type { DB } from './db.js';
 import type { OssSigner, OssClient } from './oss.js';
 import { ossKeyOf, asOssClient, depsCacheKeyOf, depsSidecarKeyOf, warmBundleKeyOf, warmSidecarKeyOf } from './oss.js';
@@ -47,6 +52,7 @@ export const DEFAULT_WORKER_INTERVAL_MS = 5000;
 export const DEFAULT_ORPHAN_INTERVAL_MS = 600_000;
 
 const token = () => randomBytes(24).toString('base64url');
+const execFileAsync = promisify(execFile);
 
 export class Worker {
   private timer?: NodeJS.Timeout;
@@ -287,6 +293,11 @@ export class Worker {
           labels: { 'agenthub/kind': 'web', 'agenthub/owner': String(h.user_id), 'agenthub/handoff': h.id },
         });
         patchHandoff(this.db, h.id, { pod_name: actualPod, serve_token: serveToken, runner_token: runnerToken });
+        // Aone 后端 createPod 返回真实实例 ID ≠ 逻辑名：历史行改名对齐，
+        // 否则后续 ready/reclaim/safeDeletePod 按实际名匹配全部落空，行永卡 provisioning（hf-dbe36d）
+        if (actualPod !== podName) {
+          this.db.prepare('UPDATE sandboxes SET pod_name=? WHERE pod_name=? AND handoff_id=?').run(actualPod, podName, h.id);
+        }
         this.provisionRetries.delete(h.id);
         setStatus(this.db, h, 'provisioning');
       } catch (e) {
@@ -498,11 +509,11 @@ export class Worker {
         const sidecarPut = oss?.configured ? await this.signer.signPut(depsSidecarKeyOf(h.user_id, h.ws_hash)) : undefined;
         const warmPut = oss?.configured ? await this.signer.signPut(warmBundleKeyOf(h.user_id, h.ws_hash)) : undefined;
         const warmSidecarPut = oss?.configured ? await this.signer.signPut(warmSidecarKeyOf(h.user_id, h.ws_hash)) : undefined;
-        const { manifest } = await runner.snapshot({
+        const { manifest } = await this.snapshotWithSalvage(h, runner, {
           outputUrl,
           ...(depsPut && sidecarPut ? { depsCachePutUrl: depsPut, depsSidecarPutUrl: sidecarPut } : {}),
           ...(warmPut && warmSidecarPut ? { warmBundlePutUrl: warmPut, warmSidecarPutUrl: warmSidecarPut } : {}),
-        });
+        }, outputKey);
         patchHandoff(this.db, h.id, { output_oss_key: outputKey, result_manifest: JSON.stringify(manifest) });
         // snapshot 阶段的 runner 日志（deps/warm 上传成败）补搬运，否则 Pod 回收后永远看不到
         await this.relayLogs(h, runner).catch(() => undefined);
@@ -529,6 +540,54 @@ export class Worker {
           this.db.prepare('UPDATE bots SET current_handoff_id=NULL WHERE id=? AND current_handoff_id=?').run(h.bot_id, h.id);
         }
       }
+    }
+  }
+
+  /** snapshot 重试 + 打捞：首次失败重试一次（runner 侧幂等重新打包）；仍失败但返回包已落 OSS
+   * （超时 abort 时上传其实在继续，hf-dbe36d 事故）则从包内 manifest.json 打捞，不判死不删 Pod */
+  private async snapshotWithSalvage(
+    h: HandoffRow,
+    runner: RunnerClient,
+    req: Parameters<RunnerClient['snapshot']>[0],
+    outputKey: string,
+  ): Promise<{ manifest: HandoffManifest }> {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await runner.snapshot(req);
+      } catch (e) {
+        lastErr = e;
+        recordEvent(this.db, h.id, 'log', JSON.stringify({ t: nowIso(), tag: 'sys', c: `snapshot attempt ${attempt + 1} failed: ${msg(e)}` }));
+      }
+    }
+    const salvaged = await this.salvageManifest(h, outputKey);
+    if (salvaged) {
+      recordEvent(this.db, h.id, 'log', JSON.stringify({ t: nowIso(), tag: 'sys', c: 'snapshot salvaged: output package already on OSS, manifest extracted' }));
+      return { manifest: salvaged };
+    }
+    throw lastErr;
+  }
+
+  /** 从已上传的返回包里提取 manifest.json（tar -xzO 不落盘）；包不在/损坏返 undefined 由上层判失败 */
+  private async salvageManifest(h: HandoffRow, outputKey: string): Promise<HandoffManifest | undefined> {
+    const oss = asOssClient(this.signer);
+    if (!oss?.configured) return undefined;
+    const exists = await oss.head(outputKey).catch(() => undefined);
+    if (!exists) return undefined;
+    try {
+      const url = await this.signer.signGet(outputKey);
+      const pkg = join(tmpdir(), `agenthub-salvage-${h.id}.tar.gz`);
+      const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+      if (!res.ok || !res.body) return undefined;
+      await writeFile(pkg, Buffer.from(await res.arrayBuffer()));
+      try {
+        const { stdout } = await execFileAsync('tar', ['-xzOf', pkg, 'manifest.json']);
+        return JSON.parse(stdout) as HandoffManifest;
+      } finally {
+        await rm(pkg, { force: true }).catch(() => undefined);
+      }
+    } catch {
+      return undefined;
     }
   }
 
