@@ -74,7 +74,7 @@ export function BotsModal({ onClose }: { onClose: () => void }) {
     >
       <div className="modal" style={{ width: 480 }}>
         <div className="modal-h">
-          <div className="mh-icon" style={{ background: 'rgba(109,124,255,.12)', color: 'var(--brand)' }}>
+          <div className="mh-icon" style={{ background: 'rgba(74,222,128,.1)', color: 'var(--brand)' }}>
             <i className="fa-solid fa-robot" />
           </div>
           <div>
