@@ -1,14 +1,13 @@
 /**
  * 设置视图（S19）。真实数据 GET/PATCH /api/settings。
  * - webhook 加密落库，界面只显示掩码；「测试」按钮走服务端真实连通性反馈；
- * - token 轮换返回新 token 并立刻落 localStorage，避免把自己踢下线；
- * - 「Chat 消息同步」没有干净挂点，渲染 disabled + 「计划中」，不撒谎；
  * - 「本地缓存清理」是 CLI 本机行为 → 只读说明 + 可复制命令。
+ * （Chat 消息同步、API Token 轮换已按用户决策下线：前者无可行挂点，后者无人关心）
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { AuthRequiredError, saveToken } from '../api/client.js';
-import { fetchSettings, patchSettings, rotateToken, testWebhook } from '../api/settings.js';
+import { AuthRequiredError } from '../api/client.js';
+import { fetchSettings, patchSettings, testWebhook } from '../api/settings.js';
 import { Card } from '../components/ui/Card.js';
 import { FormRow, Switch, TagChip } from '../components/ui/FormRow.js';
 
@@ -25,8 +24,6 @@ export function SettingsView() {
   const [webhookInput, setWebhookInput] = useState('');
   const [showWebhook, setShowWebhook] = useState(false);
   const [testMsg, setTestMsg] = useState<string | null>(null);
-  const [rotateArmed, setRotateArmed] = useState(false);
-  const [rotateMsg, setRotateMsg] = useState<string | null>(null);
 
   const patch = useMutation({
     mutationFn: patchSettings,
@@ -36,15 +33,6 @@ export function SettingsView() {
     mutationFn: () => testWebhook(webhookInput || undefined),
     onSuccess: () => setTestMsg('连通性测试成功，钉钉群应已收到测试消息。'),
     onError: (e) => setTestMsg(`测试失败：${e instanceof Error ? e.message : String(e)}`),
-  });
-  const rotate = useMutation({
-    mutationFn: rotateToken,
-    onSuccess: (token) => {
-      saveToken(token); // 立刻换新，避免把自己踢下线
-      setRotateArmed(false);
-      setRotateMsg('已轮换。旧 token 即刻失效，当前浏览器已切换到新 token；其他客户端需重新登录。');
-    },
-    onError: (e) => setRotateMsg(`轮换失败：${e instanceof Error ? e.message : String(e)}`),
   });
 
   const copyCmd = (cmd: string) => void navigator.clipboard.writeText(cmd);
@@ -58,7 +46,7 @@ export function SettingsView() {
           </div>
           <div>
             <h1>设置</h1>
-            <div className="sub">Hub 连接 · 通知集成 · 安全 · CLI 本机配置</div>
+            <div className="sub">Hub 连接 · 通知集成 · CLI 本机配置</div>
           </div>
         </div>
 
@@ -91,10 +79,6 @@ export function SettingsView() {
                 />
                 <TagChip>{data.settings.notifyStatusChange ? '开' : '关'}</TagChip>
               </FormRow>
-              <FormRow label="Chat 消息同步" hint="ACP 回复没有干净的全局挂点，暂不可用">
-                <Switch label="Chat 消息同步" checked={false} disabled onChange={() => undefined} />
-                <TagChip>计划中</TagChip>
-              </FormRow>
               <FormRow
                 label="钉钉群 Webhook"
                 hint={data.settings.webhook.configured ? `已配置：${data.settings.webhook.masked}` : '群设置 → 机器人 → 自定义 Webhook'}
@@ -122,28 +106,6 @@ export function SettingsView() {
                   {test.isPending ? '测试中…' : '测试'}
                 </button>
                 {testMsg && <span className="mono">{testMsg}</span>}
-              </FormRow>
-            </Card>
-
-            <Card title="安全">
-              <FormRow label="API Token" hint="JWT；轮换后旧 token 立刻失效，其他客户端需重新登录">
-                <button
-                  type="button"
-                  className={rotateArmed ? 'btn danger' : 'btn'}
-                  disabled={rotate.isPending}
-                  onClick={() => {
-                    if (rotateArmed) rotate.mutate();
-                    else setRotateArmed(true);
-                  }}
-                >
-                  {rotateArmed ? '确认轮换？' : '轮换 Token'}
-                </button>
-                {rotateArmed && (
-                  <button type="button" className="link-btn" onClick={() => setRotateArmed(false)}>
-                    取消
-                  </button>
-                )}
-                {rotateMsg && <span className="mono">{rotateMsg}</span>}
               </FormRow>
             </Card>
 

@@ -102,14 +102,4 @@ describe('SettingsView', () => {
     fireEvent.click(screen.getByRole('button', { name: '测试' }));
     expect(await screen.findByText(/测试失败/)).toBeInTheDocument();
   });
-
-  it('token 轮换：二次确认后新 token 落 localStorage', async () => {
-    mount();
-    await screen.findByRole('switch', { name: '任务状态通知' });
-    responder = (url) => (url.includes('/settings/token') ? { body: { token: 'new-tok' } } : { body: base });
-    fireEvent.click(screen.getByRole('button', { name: '轮换 Token' }));
-    fireEvent.click(screen.getByRole('button', { name: '确认轮换？' }));
-    expect(await screen.findByText(/已轮换/)).toBeInTheDocument();
-    expect(localStorage.getItem('agenthub_token')).toBe('new-tok');
-  });
 });
