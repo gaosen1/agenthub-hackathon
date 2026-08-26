@@ -110,7 +110,7 @@ export function OssView() {
           </div>
           <div>
             <h1>OSS 对象存储</h1>
-            <div className="sub">输入包 / 返回包的唯一数据通道 · 代码不经过第三方托管平台</div>
+            <div className="sub">输入包 / 返回包的唯一数据通道 · 依赖缓存、warm bundle 与 bot 快照同桶存储（本面板仅列 handoff 包）</div>
           </div>
         </div>
 
@@ -168,7 +168,7 @@ export function OssView() {
                 columns={columns}
                 rows={data.items}
                 rowKey={(o) => o.key}
-                empty="还没有任何包对象。在本地仓库执行 agenthub push 后，输入包会出现在这里。"
+                empty="还没有任何包对象。在本地仓库执行 ah push 后，输入包会出现在这里。"
               />
             </Card>
             <Card title="签名 URL">

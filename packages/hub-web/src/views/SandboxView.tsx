@@ -2,11 +2,11 @@
  * Sandbox 调度层视图（原型 docs/prototype.html §view-sandbox）
  *
  * 原型里这一页的数值全是编的，此处逐项换成真源（见 GET /api/sandboxes）：
- * - 副标题的「E2B 临时执行环境」→ 本项目实际是 ACK 集群 + ACS 弹性算力
- * - `sb-e2b-7d21` → 真实 pod 名 `ah-web-<6hex>` / `ah-bot-<id>-<name>`
+ * - 副标题的「E2B 临时执行环境」→ 实际后端由接口下发：k8s（ACK 集群 + ACS 弹性算力）| aone（弹内免费算力）
+ * - `sb-e2b-7d21` → 真实实例名 `ah-web-<6hex>` / `ah-bot-<id>-<name>`
  * - `qwen-code:v1.4.2` → SANDBOX_IMAGE
  * - 「已发布」badge / 构建日期 → 没有真实来源，不渲染
- * - 「回收与超时策略」四条文案 → Worker 的真实配置
+ * - 「回收与超时策略」文案 → Worker 的真实配置（活跃度驱动生命周期）
  */
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
@@ -33,9 +33,9 @@ const REASON_LABEL: Record<NonNullable<SandboxInstance['reclaimReason']>, string
   'task-failed': '任务失败',
   expired: '超时回收',
   cancelled: '已取消',
-  'pod-failed': 'Pod 启动失败',
+  'pod-failed': '实例启动失败',
   'load-failed': '输入包加载失败',
-  'pod-lost': 'Pod 丢失',
+  'pod-lost': '实例丢失',
   'bot-deleted': 'Bot 已删除',
   orphan: '孤儿清理',
   'crash-recover': '重启对账丢失',
@@ -96,7 +96,8 @@ function TemplateCard({ template }: { template: NonNullable<SandboxListResp['tem
           {template.image}
         </span>
         <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--tx3)' }}>
-          基础镜像 {template.baseImage} · {template.acs ? 'ACS 弹性算力' : '常规节点'}
+          基础镜像 {template.baseImage} ·{' '}
+          {template.backend === 'aone' ? 'Aone 沙箱（弹内算力）' : template.acs ? 'ACS 弹性算力' : '常规节点'}
         </span>
       </div>
       <div style={{ marginBottom: 12 }}>
@@ -112,7 +113,7 @@ function TemplateCard({ template }: { template: NonNullable<SandboxListResp['tem
         </div>
         <div>
           <i className="fa-solid fa-shield-halved" style={{ color: 'var(--ok)', width: 20 }} />
-          镜像不含任何凭证：模型 API Key 由 Worker 创建时以 Secret 注入，
+          镜像不含任何凭证：模型 API Key 由 Worker 创建时注入（K8s Secret / Aone 环境变量），
           OSS 访问仅用 Hub 签发的限时签名 URL
         </div>
       </div>
@@ -127,25 +128,24 @@ function PolicyCard({ policy }: { policy: SandboxListResp['policy'] }) {
       <div style={{ fontSize: 12.5, color: 'var(--tx2)', lineHeight: 2.1 }}>
         <div>
           <i className="fa-solid fa-circle-check" style={{ color: 'var(--ok)', width: 20 }} />
-          任务进入终态后立即销毁实例
-          {policy.taskLingerMinutes > 0 && `（task 完成后留驻 ${policy.taskLingerMinutes} 分钟供继续对话）`}
+          Web 实例任务终态后销毁；Bot 常驻实例不销毁（终态只关 handoff 记录并打包成果）
         </div>
         <div>
           <i className="fa-solid fa-hourglass-end" style={{ color: 'var(--warn)', width: 20 }} />
-          任务执行期默认 {policy.defaultTimeoutMinutes >= 60 ? `${Math.round(policy.defaultTimeoutMinutes / 60)} 小时` : `${policy.defaultTimeoutMinutes} 分钟`}硬超时（push --timeout 可覆盖）；有活动自动续命，task 完成后时钟停摆，bot 转活跃度驱动的空闲回收
+          任务执行期默认 {policy.defaultTimeoutMinutes >= 60 ? `${Math.round(policy.defaultTimeoutMinutes / 60)} 小时` : `${policy.defaultTimeoutMinutes} 分钟`}硬超时（静默容忍语义：只检测长时间无产出的卡死，push --timeout 可覆盖）；活跃任务自动续命，task 完成后时钟停摆
         </div>
         <div>
           <i className="fa-regular fa-clock" style={{ color: 'var(--cyan)', width: 20 }} />
-          交互式会话空闲 {policy.idleTtlMinutes} 分钟后回收
+          交互会话与 Bot 任务完成后的驻留期，空闲超 {policy.idleTtlMinutes} 分钟回收；任务执行期的长静默操作不受此约束
         </div>
         <div>
           <i className="fa-solid fa-rotate" style={{ color: 'var(--info)', width: 20 }} />
-          Worker 每 {policy.workerIntervalMs / 1000} 秒推进一轮；重启时对账实例与集群实况，
+          Worker 每 {policy.workerIntervalMs / 1000} 秒推进一轮；重启时与后端实况对账实例，
           丢失的记为 lost 而非停留在运行中
         </div>
         <div>
           <i className="fa-solid fa-broom" style={{ color: 'var(--tx3)', width: 20 }} />
-          每 {mins(policy.orphanIntervalMs)} 分钟清理无关联任务的孤儿 Pod
+          每 {mins(policy.orphanIntervalMs)} 分钟清理无关联任务的孤儿实例
         </div>
       </div>
     </Card>
@@ -160,11 +160,13 @@ export function SandboxView() {
     retry: false,
   });
 
+  const backendSub =
+    data?.template?.backend === 'aone' ? 'Aone 沙箱 · 弹内算力' : 'ACK 集群 · ACS 弹性算力';
   const header = (
     <ViewHeader
       icon="fa-cube"
       title="Sandbox 调度层"
-      sub="ACK 集群 · ACS 弹性算力 · 任务级生命周期 · 用完即毁"
+      sub={`${backendSub} · Web 用完即毁 / Bot 常驻 · 活跃度驱动生命周期`}
     />
   );
 
@@ -205,7 +207,7 @@ export function SandboxView() {
         {data && !data.configured && (
           <Card icon="fa-triangle-exclamation" title="编排未启用">
             <div className="empty-hint">
-              当前 hub-server 未接入 K8s（HUB_NO_K8S=1 或 kubeconfig 不可用），
+              当前 hub-server 未接入编排后端（HUB_NO_K8S=1、kubeconfig 不可用或 Aone 凭证缺失），
               无法创建云端实例。下方仅显示历史记录与生效中的策略。
             </div>
           </Card>

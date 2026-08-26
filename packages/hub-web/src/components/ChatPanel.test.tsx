@@ -59,13 +59,13 @@ describe('ChatPanel Web Shell 承载（running）', () => {
     expect(screen.queryByTitle('Qwen Code Web Shell')).toBeNull();
   });
 
-  it('reachable=false 提示不可直达（hub 与浏览器不同机）', async () => {
+  it('reachable=false 提示启动中/暂不可达（冷启动窗口自动重试）', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(new Response(JSON.stringify({ url: 'http://10.0.0.1:8081', reachable: false }), { status: 200 })),
     );
     mount(detail);
-    expect(await screen.findByText(/不可直达/)).toBeInTheDocument();
+    expect(await screen.findByText(/暂不可达/)).toBeInTheDocument();
   });
 
   it('周期重取返回新入口时更换 iframe src（转发死亡/hub 重启恢复）', async () => {

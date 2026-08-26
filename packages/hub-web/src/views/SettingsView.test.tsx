@@ -24,7 +24,9 @@ const base: SettingsResp = {
     ossRegion: 'oss-cn-hangzhou',
     signedUrlTtlSeconds: 1800,
     sandboxImage: 'registry.example.com/agenthub-demo/sandbox:dev',
-    idleTtlMinutes: 120,
+    idleTtlMinutes: 30,
+    backend: 'aone',
+    defaultTimeoutMinutes: 1440,
   },
 };
 
@@ -62,7 +64,8 @@ describe('SettingsView', () => {
     mount();
     expect(await screen.findByRole('switch', { name: '任务状态通知' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('agenthub-handoff')).toBeInTheDocument();
-    expect(screen.getByText('30 分钟')).toBeInTheDocument();
+    expect(screen.getByText('24 小时')).toBeInTheDocument(); // 任务静默容忍 1440min
+    expect(screen.getAllByText('30 分钟').length).toBe(2); // 签名 URL 30min + 空闲回收 TTL 30min
     // Chat 消息同步不撒谎：disabled + 计划中
     expect(screen.getByRole('switch', { name: 'Chat 消息同步' })).toBeDisabled();
     expect(screen.getByText('计划中')).toBeInTheDocument();

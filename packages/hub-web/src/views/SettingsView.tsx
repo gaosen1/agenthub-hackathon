@@ -161,21 +161,31 @@ export function SettingsView() {
               <FormRow label="Sandbox 镜像">
                 <span className="mono">{data.server.sandboxImage}</span>
               </FormRow>
-              <FormRow label="空闲 TTL">
+              <FormRow label="编排后端">
+                <span className="mono">{data.server.backend === 'aone' ? 'Aone 沙箱（弹内算力）' : 'K8s（ACK/ACS）'}</span>
+              </FormRow>
+              <FormRow label="任务静默容忍" hint="执行期卡死检测语义，非寿命上限；活跃自动续命">
+                <span className="mono">
+                  {data.server.defaultTimeoutMinutes >= 60
+                    ? `${Math.round(data.server.defaultTimeoutMinutes / 60)} 小时`
+                    : `${data.server.defaultTimeoutMinutes} 分钟`}
+                </span>
+              </FormRow>
+              <FormRow label="空闲回收 TTL" hint="交互会话 / Bot 驻留期空闲超过即回收">
                 <span className="mono">{data.server.idleTtlMinutes} 分钟</span>
               </FormRow>
             </Card>
 
             <Card title="CLI 本机配置" hint="服务端管不到本机行为，这里给可复制命令">
               <div className="cmd">
-                <span className="dollar">$</span> agenthub config list
-                <button type="button" className="copy" onClick={() => copyCmd('agenthub config list')}>
+                <span className="dollar">$</span> ah config list
+                <button type="button" className="copy" onClick={() => copyCmd('ah config list')}>
                   复制
                 </button>
               </div>
               <div className="cmd">
-                <span className="dollar">$</span> agenthub config set includeUntracked true
-                <button type="button" className="copy" onClick={() => copyCmd('agenthub config set includeUntracked true')}>
+                <span className="dollar">$</span> ah config set includeUntracked true
+                <button type="button" className="copy" onClick={() => copyCmd('ah config set includeUntracked true')}>
                   复制
                 </button>
               </div>

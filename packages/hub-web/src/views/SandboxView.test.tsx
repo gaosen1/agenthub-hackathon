@@ -23,6 +23,7 @@ const baseResp: SandboxListResp = {
     resources: { cpu: '2', memory: '4Gi' },
     ports: { runner: 8080, serve: 8081 },
     acs: true,
+    backend: 'k8s',
   },
   policy: {
     defaultTimeoutMinutes: 30,
@@ -71,9 +72,15 @@ describe('SandboxView', () => {
 
   it('策略卡用真实配置渲染，随配置变化', async () => {
     mount({ policy: { ...baseResp.policy, idleTtlMinutes: 45, orphanIntervalMs: 1_200_000, defaultTimeoutMinutes: 60 } });
-    expect(await screen.findByText(/空闲 45 分钟后回收/)).toBeInTheDocument();
-    expect(screen.getByText(/默认 60 分钟硬超时/)).toBeInTheDocument();
-    expect(screen.getByText(/每 20 分钟清理/)).toBeInTheDocument();
+    expect(await screen.findByText(/空闲超 45 分钟回收/)).toBeInTheDocument();
+    expect(screen.getByText(/默认 1 小时硬超时/)).toBeInTheDocument();
+    expect(screen.getByText(/每 20 分钟清理无关联任务的孤儿实例/)).toBeInTheDocument();
+  });
+
+  it('aone 后端副标题与模板卡如实标注', async () => {
+    mount({ template: { ...baseResp.template!, backend: 'aone', acs: false } });
+    expect(await screen.findByText(/Aone 沙箱 · 弹内算力/)).toBeInTheDocument();
+    expect(screen.getByText(/Aone 沙箱（弹内算力）/)).toBeInTheDocument();
   });
 
   it('web 实例给出 handoff 深链，bot 实例没有归属故不给链接', async () => {

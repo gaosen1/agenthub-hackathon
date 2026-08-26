@@ -32,9 +32,9 @@ describe('IdeView', () => {
     expect(frame.getAttribute('src')).toBe('/api/handoffs/hf-9f3a2c/ide/');
   });
 
-  it('NAS 未预置 code-server 时给 seed Job 指引', async () => {
+  it('未预置 code-server 时按后端给出处置指引', async () => {
     mount(() => json(409, { error: { code: 'ERR_NOT_READY', message: 'code-server not preinstalled on shared layer' } }));
-    expect(await screen.findByText(/NAS 共享层尚未预置/)).toBeInTheDocument();
+    expect(await screen.findByText(/沙箱环境未预置 code-server/)).toBeInTheDocument();
     expect(screen.getByText(/30-nas-seed-job\.yaml/)).toBeInTheDocument();
   });
 
