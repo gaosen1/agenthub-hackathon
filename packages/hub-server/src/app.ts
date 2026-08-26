@@ -917,6 +917,7 @@ export function buildApp(opts: AppOptions): FastifyInstance {
             resources: { ...SANDBOX_RESOURCES },
             ports: { ...SANDBOX_PORTS },
             acs: sandbox!.acs ?? true,
+            backend: (process.env.SANDBOX_BACKEND === 'aone' ? 'aone' : 'k8s') as 'aone' | 'k8s',
           }
         : null,
       policy: sandbox?.worker ? sandbox.worker.policy() : defaultPolicy(),
@@ -1024,7 +1025,10 @@ export function buildApp(opts: AppOptions): FastifyInstance {
         ossRegion: process.env.OSS_REGION ?? null,
         signedUrlTtlSeconds: SIGNED_URL_TTL_SECONDS,
         sandboxImage: sandboxImage(),
-        idleTtlMinutes: Number(process.env.SANDBOX_IDLE_TTL_MINUTES ?? 120),
+        // 与 worker/index 的实际默认对齐（30min 空闲回收），不另写一套 120
+        idleTtlMinutes: sandbox?.worker ? sandbox.worker.policy().idleTtlMinutes : Number(process.env.SANDBOX_IDLE_TTL_MINUTES ?? 30),
+        backend: (process.env.SANDBOX_BACKEND === 'aone' ? 'aone' : 'k8s') as 'aone' | 'k8s',
+        defaultTimeoutMinutes: sandbox?.worker ? sandbox.worker.policy().defaultTimeoutMinutes : 1440,
       },
     };
   });

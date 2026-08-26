@@ -49,7 +49,7 @@ describe('降级矩阵（S22）', () => {
     const sbBody = sb.json() as { configured: boolean; items: unknown[]; policy: { idleTtlMinutes: number } };
     expect(sbBody.configured).toBe(false);
     expect(sbBody.items).toEqual([]);
-    expect(sbBody.policy.idleTtlMinutes).toBe(120);
+    expect(sbBody.policy.idleTtlMinutes).toBe(30);
 
     const oss = await app.inject({ method: 'GET', url: '/api/oss?refresh=1', headers: auth });
     expect(oss.statusCode).toBe(200);

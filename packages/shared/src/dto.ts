@@ -237,8 +237,10 @@ export const SandboxTemplateSchema = z.object({
   toolchain: z.array(z.string()),
   resources: z.object({ cpu: z.string(), memory: z.string() }),
   ports: z.object({ runner: z.number(), serve: z.number(), ide: z.number().optional() }),
-  /** ACS 弹性算力调度（virtual-kubelet） */
+  /** ACS 弹性算力调度（virtual-kubelet，仅 k8s 后端） */
   acs: z.boolean(),
+  /** 编排后端：k8s（ACK/ACS）| aone（弹内免费算力）；老响应缺省时按 k8s */
+  backend: z.enum(['k8s', 'aone']).default('k8s'),
 });
 export type SandboxTemplate = z.infer<typeof SandboxTemplateSchema>;
 
@@ -325,6 +327,9 @@ export const SettingsRespSchema = z.object({
     signedUrlTtlSeconds: z.number(),
     sandboxImage: z.string(),
     idleTtlMinutes: z.number(),
+    backend: z.enum(['k8s', 'aone']).default('k8s'),
+    /** 任务执行期静默容忍（卡死检测语义，非寿命上限） */
+    defaultTimeoutMinutes: z.number().default(1440),
   }),
 });
 export type SettingsResp = z.infer<typeof SettingsRespSchema>;

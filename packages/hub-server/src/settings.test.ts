@@ -42,7 +42,7 @@ describe('S16 设置存取', () => {
     expect(body.settings.notifyStatusChange).toBe(true);
     expect(body.settings.webhook.configured).toBe(false);
     expect(body.server.signedUrlTtlSeconds).toBe(1800);
-    expect(body.server.idleTtlMinutes).toBe(120);
+    expect(body.server.idleTtlMinutes).toBe(30);
   });
 
   it('PATCH webhook 后 GET 只回掩码，响应体 grep 不到明文', async () => {

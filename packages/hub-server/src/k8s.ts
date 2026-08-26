@@ -77,8 +77,8 @@ export const NAS_MOUNT_PATH = '/mnt/shared';
 /** 镜像元数据登记：事实源头是 packages/sandbox/Dockerfile，改 Dockerfile 要同步改 */
 export const SANDBOX_TEMPLATE = {
   baseImage: 'node:22-slim',
-  qwenVersion: '0.20.1',
-  toolchain: ['git', 'ripgrep', 'tar', 'procps'],
+  qwenVersion: '0.21.14',
+  toolchain: ['git', 'ripgrep', 'tar', 'zstd', 'curl', 'qwen-code', 'code-server'],
 };
 
 export function loadKube(): k8s.KubeConfig {
