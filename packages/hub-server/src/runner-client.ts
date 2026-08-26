@@ -15,7 +15,7 @@ export class RunnerClient {
     private readonly token: string | null,
   ) {}
 
-  private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async call<T>(method: string, path: string, body?: unknown, timeoutMs = 30_000): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method,
       headers: {
@@ -23,7 +23,7 @@ export class RunnerClient {
         ...(this.token ? { 'x-runner-token': this.token } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       throw new RunnerError(res.status, `runner ${method} ${path} -> ${res.status}: ${await res.text().catch(() => '')}`);
@@ -40,7 +40,9 @@ export class RunnerClient {
   }
 
   snapshot(req: RunnerSnapshotReq): Promise<{ manifest: HandoffManifest }> {
-    return this.call('POST', '/snapshot', req);
+    // 打包+上传返回包、依赖缓存（node_modules 最高 1.5GB）与 warm bundle 串行执行，
+    // 大仓库分钟级：30s 通用超时会 abort 掉正在上传的成功任务（hf-dbe36d 事故），env 可调
+    return this.call('POST', '/snapshot', req, Number(process.env.RUNNER_SNAPSHOT_TIMEOUT_MS ?? 600_000));
   }
 
   chats(): Promise<{ items: ChatListItem[] }> {
