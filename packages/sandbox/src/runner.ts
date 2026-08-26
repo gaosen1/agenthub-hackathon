@@ -345,6 +345,24 @@ export function buildRunner(): FastifyInstance {
               appendLog('sys', `serve task path unavailable (${e instanceof Error ? e.message : String(e)}); fallback headless`);
               code = await runTask(manifest.workspacePath, manifest.sessionId, taskText);
             }
+            // turn 结束 ≠ 任务结束：模型派发后台代理（探索/子任务）后 turn 立即返回，session 仍在 daemon
+            // 里续写——此刻判完会 premature 推「完成」且真终态无人推送（hf-c70fd4 事故：12:54 报完成 0 commit，
+            // 真完工 13:07 两个 commit 无推送）。判据：session jsonl mtime 连续 120s 无新写才算真结束
+            if (code === 0) {
+              const sessJsonl = join(qwenHome(), 'projects', manifest.wsHash, 'chats', `${manifest.sessionId}.jsonl`);
+              let lastM = await fs.stat(sessJsonl).then((s) => s.mtimeMs).catch(() => 0);
+              let quietSince = Date.now();
+              if (lastM > 0) appendLog('sys', 'task turn returned; waiting for session quiescence (background agents)');
+              while (lastM > 0 && Date.now() - quietSince < 120_000) {
+                await new Promise((r) => setTimeout(r, 10_000));
+                touchActivity();
+                const m = await fs.stat(sessJsonl).then((s) => s.mtimeMs).catch(() => lastM);
+                if (m > lastM) {
+                  lastM = m;
+                  quietSince = Date.now();
+                }
+              }
+            }
             state.taskDone = true;
             if (code !== 0) state.lastError = `task relay failed (exit ${code})`;
             appendLog(code === 0 ? 'ok' : 'err', `task relay finished (exit ${code})`);
