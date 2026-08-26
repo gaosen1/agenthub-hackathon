@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgentHub UI 风格方向对比</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#20242a;color:#dfe3e8;font:14px/1.6 -apple-system,'PingFang SC','Microsoft YaHei',sans-serif;padding:32px 20px 80px}
+  .page-head{max-width:1080px;margin:0 auto 28px}
+  .page-head h1{font-size:22px;font-weight:700}
+  .page-head p{color:#98a9b3;font-size:13px;margin-top:6px}
+  .theme{max-width:1080px;margin:0 auto 44px;border:1px solid #333a44;border-radius:10px;overflow:hidden;position:relative}
+  .theme::before{content:"";position:absolute;inset:0;pointer-events:none;opacity:.05;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E")}
+  .spec{padding:14px 22px;font:12px/1.7 ui-monospace,Menlo,Consolas,monospace;color:#8b98a5;background:#171b21;border-bottom:1px solid #333a44}
+  .spec b{color:#dfe3e8}
+
+  /* ============ 组件通用结构（变量驱动） ============ */
+  .stage{background:var(--bg);color:var(--tx);font-family:var(--fb);padding:22px 26px 30px}
+  .stage .top{display:flex;align-items:center;gap:14px;padding:10px 16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);margin-bottom:16px}
+  .stage .brand{font-family:var(--fd);font-weight:700;font-size:15px;letter-spacing:var(--track,0)}
+  .stage .brand .sq{display:inline-flex;width:22px;height:22px;align-items:center;justify-content:center;background:var(--acc);color:var(--bg);border-radius:var(--ri);margin-right:8px;font-size:12px;font-weight:700}
+  .stage .nav{display:flex;gap:2px;margin-left:10px}
+  .stage .nav span{padding:4px 10px;border-radius:var(--ri);color:var(--tx2);font-size:12.5px}
+  .stage .nav span.on{color:var(--tx);background:var(--raise)}
+  .stage .conn{margin-left:auto;font-size:11.5px;color:var(--tx2);border:1px solid var(--line);padding:3px 10px;border-radius:var(--pill,999px);display:flex;gap:6px;align-items:center}
+  .stage .conn i{width:7px;height:7px;border-radius:50%;background:var(--ok);font-style:normal}
+  .stage .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px}
+  .stage .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
+  .stage .stat .k{font-size:10.5px;color:var(--tx3);letter-spacing:var(--captrack,.06em);text-transform:var(--cap,uppercase);margin-bottom:6px;font-style:var(--capstyle,normal)}
+  .stage .stat .v{font-family:var(--fm);font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+  .stage .stat .v small{font-size:11px;color:var(--tx2);font-weight:400}
+  .stage .item{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;margin-bottom:12px}
+  .stage .item .r1{display:flex;align-items:center;gap:8px}
+  .stage .item .repo{font-weight:600;font-size:13px}
+  .stage .badge{margin-left:auto;font-size:10.5px;font-weight:600;padding:2px 9px;border-radius:var(--pill,999px);color:var(--acc);background:var(--accbg);border:var(--badgeborder,none)}
+  .stage .badge.ok{color:var(--ok);background:var(--okbg)}
+  .stage .item .sum{color:var(--tx2);font-size:12px;margin-top:6px}
+  .stage .item .meta{color:var(--tx3);font-size:11px;margin-top:8px;font-family:var(--fm)}
+  .stage table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-bottom:16px}
+  .stage th{font-size:10.5px;color:var(--tx3);text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);letter-spacing:var(--captrack,.06em);text-transform:var(--cap,uppercase);font-style:var(--capstyle,normal)}
+  .stage td{font-size:12px;padding:9px 12px;border-bottom:1px solid var(--line);color:var(--tx2)}
+  .stage tr:last-child td{border-bottom:none}
+  .stage td.mono{font-family:var(--fm);font-size:11.5px}
+  .stage .btns{display:flex;gap:8px;align-items:center;margin-bottom:16px}
+  .stage .btn{border:1px solid var(--line2);background:var(--raise);color:var(--tx);border-radius:var(--ri);padding:6px 14px;font-size:12.5px;font-family:var(--fb);cursor:pointer}
+  .stage .btn.pri{background:var(--cta,var(--acc));border-color:transparent;color:var(--ctaink,var(--bg));font-weight:600}
+  .stage .lnk{color:var(--acc);font-size:12px;text-decoration:none;border:none;background:none;cursor:pointer}
+  .stage .log{background:var(--logbg);border:1px solid var(--line);border-radius:var(--r);font-family:var(--fm);font-size:11.5px;line-height:1.9;padding:10px 14px;color:var(--tx2)}
+  .stage .log .t{color:var(--tx3)} .stage .log .ok{color:var(--ok)} .stage .log .ac{color:var(--acc)} .stage .log .wr{color:var(--warn)}
+
+  /* ============ A 终端工业 ============ */
+  .theme-a{--bg:#0b0e0c;--panel:#101511;--raise:#161c17;--line:#202b22;--line2:#2e3b30;
+    --tx:#d8e4d8;--tx2:#93a696;--tx3:#5d7061;--acc:#4ade80;--accbg:rgba(74,222,128,.1);
+    --ok:#4ade80;--okbg:rgba(74,222,128,.1);--warn:#d9a441;--fb:ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+    --fd:ui-monospace,Menlo,monospace;--fm:ui-monospace,Menlo,monospace;--r:2px;--ri:2px;--pill:2px;
+    --cap:none;--capstyle:normal;--captrack:0;--badgeborder:1px solid rgba(74,222,128,.35);--logbg:#080b09}
+  .theme-a .stage .k::before,.theme-a .stage th::before{content:"// ";color:var(--tx3)}
+  .theme-a .stage th,.theme-a .stage .stat .k{text-transform:none;letter-spacing:0}
+
+  /* ============ B 纸质编辑 ============ */
+  .theme-b{--bg:#f2efe6;--panel:#faf8f1;--raise:#efece1;--line:#d9d2c0;--line2:#c4bca6;
+    --tx:#201d17;--tx2:#5d5749;--tx3:#8d8677;--acc:#bc4327;--accbg:rgba(188,67,39,.08);
+    --ok:#3e7a55;--okbg:rgba(62,122,85,.1);--warn:#9a742c;
+    --fb:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+    --fd:'Songti SC','Noto Serif SC',Georgia,'Times New Roman',serif;
+    --fm:ui-monospace,Menlo,monospace;--r:0px;--ri:0px;--pill:0px;
+    --cap:none;--capstyle:italic;--captrack:0;--cta:#201d17;--ctaink:#f2efe6;--logbg:#ece8dc}
+  .theme-b .stage .brand{font-size:17px}
+  .theme-b .stage .conn{border-style:solid}
+
+  /* ============ C 精制暗暖 ============ */
+  .theme-c{--bg:#141210;--panel:#1b1815;--raise:#242019;--line:#2c2822;--line2:#3d372c;
+    --tx:#ece7dd;--tx2:#a89e8e;--tx3:#6f675a;--acc:#d99a3d;--accbg:rgba(217,154,61,.12);
+    --ok:#6fbf8f;--okbg:rgba(111,191,143,.12);--warn:#d9a441;
+    --fb:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+    --fd:'Avenir Next',Futura,'Segoe UI Variable Display',-apple-system,sans-serif;
+    --fm:ui-monospace,'SF Mono',Menlo,monospace;--r:10px;--ri:4px;--pill:999px;
+    --logbg:#100e0b}
+  .theme-c .stage .stat,.theme-c .stage .item,.theme-c .stage table{box-shadow:0 10px 28px rgba(12,9,5,.45)}
+  .theme-c .stage .badge{border-radius:3px}
+</style>
+</head>
+<body>
+<div class="page-head">
+  <h1>AgentHub UI 风格方向对比</h1>
+  <p>同一组界面元素（顶栏 / 统计卡 / 任务行 / 表格 / 按钮 / 日志）在三种方向下的呈现。仅样式层，逻辑不动。</p>
+</div>
+
+<!-- ============ A ============ -->
+<div class="theme theme-a">
+  <div class="spec"><b>A 终端工业</b> · 全等宽字体 · 石墨黑 + 荧光绿单 accent · 直角 2px · 发丝线/虚线 · 状态用文本符号 · // 注释式小标 · 细噪点</div>
+  <div class="stage">
+    <div class="top"><span class="brand"><span class="sq">▚</span>agenthub</span><span class="nav"><span class="on">tasks</span><span>sandbox</span><span>oss</span><span>config</span></span><span class="conn"><i></i>hub connected</span></div>
+    <div class="grid">
+      <div class="stat"><div class="k">running</div><div class="v">2</div></div>
+      <div class="stat"><div class="k">24h reclaimed</div><div class="v">7</div></div>
+      <div class="stat"><div class="k">exec min</div><div class="v">183 <small>min</small></div></div>
+    </div>
+    <div class="item"><div class="r1"><span class="repo">vscode-datastudio-extensions</span><span class="badge">● running</span></div><div class="sum">当出现实例已删除的错误信息时，增加引导前往主站创建新实例的按钮</div><div class="meta">hf-5cb6ee · feat/data-agent-html-report · 22:02</div></div>
+    <div class="item"><div class="r1"><span class="repo">payment-gateway</span><span class="badge ok">○ done</span></div><div class="sum">重构 OrderService，拆分状态机逻辑并补齐单元测试</div><div class="meta">hf-9f3a2c · refactor/order-service · 3 commits</div></div>
+    <table><tr><th>instance</th><th>kind</th><th>status</th><th>reason</th></tr><tr><td class="mono">ah-bot-10-agenthubbot</td><td>bot 常驻</td><td>running</td><td>—</td></tr><tr><td class="mono">ah-web-9f3a2c</td><td>web 临时</td><td>reclaimed</td><td>task-done</td></tr></table>
+    <div class="btns"><button class="btn pri">ah pull</button><button class="btn">打开 IDE</button><button class="lnk">结束会话并打包</button></div>
+    <div class="log"><span class="t">22:07:39</span> <span class="ok">ok</span> task relay finished (exit 0)<br><span class="t">22:07:40</span> <span class="ac">sys</span> bot snapshot uploaded (16KB)<br><span class="t">22:08:01</span> <span class="wr">warn</span> permission timed out after 300000ms</div>
+  </div>
+</div>
+
+<!-- ============ B ============ -->
+<div class="theme theme-b">
+  <div class="spec"><b>B 纸质编辑</b> · 暖纸底 + 墨字 · 衬线大标题（宋体/Source Serif）· 朱砂单 accent · 直角 · 印刷发丝线 · 斜体小标 · 零阴影</div>
+  <div class="stage">
+    <div class="top"><span class="brand"><span class="sq">汇</span>AgentHub</span><span class="nav"><span class="on">任务</span><span>沙箱</span><span>存储</span><span>设置</span></span><span class="conn"><i></i>Hub 已连接</span></div>
+    <div class="grid">
+      <div class="stat"><div class="k">运行中</div><div class="v">2</div></div>
+      <div class="stat"><div class="k">24h 内已回收</div><div class="v">7</div></div>
+      <div class="stat"><div class="k">累计执行</div><div class="v">183 <small>min</small></div></div>
+    </div>
+    <div class="item"><div class="r1"><span class="repo">vscode-datastudio-extensions</span><span class="badge">运行中</span></div><div class="sum">当出现实例已删除的错误信息时，增加引导前往主站创建新实例的按钮</div><div class="meta">hf-5cb6ee · feat/data-agent-html-report · 22:02</div></div>
+    <div class="item"><div class="r1"><span class="repo">payment-gateway</span><span class="badge ok">已完成</span></div><div class="sum">重构 OrderService，拆分状态机逻辑并补齐单元测试</div><div class="meta">hf-9f3a2c · refactor/order-service · 3 commits</div></div>
+    <table><tr><th>实例</th><th>载体</th><th>状态</th><th>结束原因</th></tr><tr><td class="mono">ah-bot-10-agenthubbot</td><td>钉钉常驻</td><td>运行中</td><td>—</td></tr><tr><td class="mono">ah-web-9f3a2c</td><td>Web 临时</td><td>已回收</td><td>任务完成</td></tr></table>
+    <div class="btns"><button class="btn pri">ah pull</button><button class="btn">打开 IDE</button><button class="lnk">结束会话并打包</button></div>
+    <div class="log"><span class="t">22:07:39</span> <span class="ok">ok</span> task relay finished (exit 0)<br><span class="t">22:07:40</span> <span class="ac">sys</span> bot snapshot uploaded (16KB)<br><span class="t">22:08:01</span> <span class="wr">warn</span> permission timed out after 300000ms</div>
+  </div>
+</div>
+
+<!-- ============ C ============ -->
+<div class="theme theme-c">
+  <div class="spec"><b>C 精制暗暖</b> · 暖灰石墨暗色 · 琥珀/铜单 accent · 展示字体 Avenir/Futura · 外 10 内 4 混合圆角 · 方角 tag · 着色阴影 + 细噪点</div>
+  <div class="stage">
+    <div class="top"><span class="brand"><span class="sq">A</span>AgentHub</span><span class="nav"><span class="on">Handoff 任务</span><span>Sandbox</span><span>OSS 存储</span><span>设置</span></span><span class="conn"><i></i>Hub 已连接</span></div>
+    <div class="grid">
+      <div class="stat"><div class="k">运行中</div><div class="v">2</div></div>
+      <div class="stat"><div class="k">24h 内已回收</div><div class="v">7</div></div>
+      <div class="stat"><div class="k">累计执行</div><div class="v">183 <small>min</small></div></div>
+    </div>
+    <div class="item"><div class="r1"><span class="repo">vscode-datastudio-extensions</span><span class="badge">运行中</span></div><div class="sum">当出现实例已删除的错误信息时，增加引导前往主站创建新实例的按钮</div><div class="meta">hf-5cb6ee · feat/data-agent-html-report · 22:02</div></div>
+    <div class="item"><div class="r1"><span class="repo">payment-gateway</span><span class="badge ok">已完成</span></div><div class="sum">重构 OrderService，拆分状态机逻辑并补齐单元测试</div><div class="meta">hf-9f3a2c · refactor/order-service · 3 commits</div></div>
+    <table><tr><th>实例</th><th>载体</th><th>状态</th><th>结束原因</th></tr><tr><td class="mono">ah-bot-10-agenthubbot</td><td>钉钉常驻</td><td>运行中</td><td>—</td></tr><tr><td class="mono">ah-web-9f3a2c</td><td>Web 临时</td><td>已回收</td><td>任务完成</td></tr></table>
+    <div class="btns"><button class="btn pri">ah pull</button><button class="btn">打开 IDE</button><button class="lnk">结束会话并打包</button></div>
+    <div class="log"><span class="t">22:07:39</span> <span class="ok">ok</span> task relay finished (exit 0)<br><span class="t">22:07:40</span> <span class="ac">sys</span> bot snapshot uploaded (16KB)<br><span class="t">22:08:01</span> <span class="wr">warn</span> permission timed out after 300000ms</div>
+  </div>
+</div>
+</body>
+</html>
