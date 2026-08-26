@@ -66,9 +66,9 @@ describe('SettingsView', () => {
     expect(screen.getByText('agenthub-handoff')).toBeInTheDocument();
     expect(screen.getByText('24 小时')).toBeInTheDocument(); // 任务静默容忍 1440min
     expect(screen.getAllByText('30 分钟').length).toBe(2); // 签名 URL 30min + 空闲回收 TTL 30min
-    // Chat 消息同步不撒谎：disabled + 计划中
-    expect(screen.getByRole('switch', { name: 'Chat 消息同步' })).toBeDisabled();
-    expect(screen.getByText('计划中')).toBeInTheDocument();
+    // 已下线项不再渲染：Chat 消息同步、API Token 轮换
+    expect(screen.queryByRole('switch', { name: 'Chat 消息同步' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /轮换 Token/ })).not.toBeInTheDocument();
   });
 
   it('切换开关发 PATCH {notifyStatusChange:false}', async () => {
