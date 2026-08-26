@@ -209,7 +209,8 @@ export async function runPromptCollect(workspacePath: string, question: string, 
   const gate = { live: false };
   const openSse = (extra: Record<string, string> = {}): Promise<void> =>
     (async () => {
-      const r = await fetch(`${base}/acp`, { headers: { accept: 'text/event-stream', ...auth, ...headers, ...extra }, signal: ac.signal });
+      // daemon 对 GET /acp 强制要求 Acp-Connection-Id（缺失即 400）：显式带上，与 runTaskViaServe 同构
+      const r = await fetch(`${base}/acp`, { headers: { accept: 'text/event-stream', ...auth, ...(headers['acp-connection-id'] ? { 'acp-connection-id': headers['acp-connection-id'] } : {}), ...extra }, signal: ac.signal });
       if (!r.ok || !r.body) return;
       const reader = r.body.getReader();
       const dec = new TextDecoder();
@@ -246,11 +247,14 @@ export async function runPromptCollect(workspacePath: string, question: string, 
         }
       }
     })().catch(() => undefined);
-  const sseConns: Array<Promise<void>> = [openSse()];
+  const sseConns: Array<Promise<void>> = [];
 
   try {
+    // 先 initialize 拿 connection-id 再开 SSE：提前开会因缺 Acp-Connection-Id 被 400 拒，
+    // session/new 的 202 异步应答帧永远到不了 → 应答超时（裸 bot 唤醒 acp-prompt 500 事故）
     const initId = await post('initialize', { protocolVersion: 1 });
     await wait(initId, 15_000);
+    sseConns.push(openSse());
     const newId = await post('session/new', { cwd: workspacePath, mcpServers: [] });
     const newResp = await wait(newId, 30_000);
     const sessionId = (newResp.result as { sessionId?: string } | undefined)?.sessionId;
