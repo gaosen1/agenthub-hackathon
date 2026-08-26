@@ -469,7 +469,10 @@ export class Worker {
         if (h.kind === 'bot' && (!h.task || health.taskDone)) {
           const basis = actSafe > 0 ? Math.max(actSafe, runningSinceMs ?? 0) : runningSinceMs;
           if (basis && Date.now() - basis > idleTtlMs) {
-            this.enterPackaging(h, 'expired', 'idle ttl');
+            // 任务已完成的驻留到期是正常收尾 → done；expired 只留给无 task 的纯空闲回收
+            // （hf-c70fd4：任务实际完成 2 commits，面板却显示「已超时」）
+            const done = Boolean(h.task && health.taskDone);
+            this.enterPackaging(h, done ? 'done' : 'expired', done ? undefined : 'idle ttl');
             continue;
           }
         }
@@ -495,8 +498,13 @@ export class Worker {
   }
 
   // packaging → snapshot 上传 → 终态 →（web）回收 Pod
+  /** snapshot 现在可到 10 分钟：tick 看门狗 60s 会提前释放 ticking 锁，下一轮 tick 可能并发
+   * 重入同一 handoff 的 packaging（hf-c70fd4：同一 handoff 并行打包 3 次）；in-flight 集合去重 */
+  private readonly packagingInflight = new Set<string>();
   private async handlePackaging(): Promise<void> {
     for (const h of listByStatus(this.db, 'packaging')) {
+      if (this.packagingInflight.has(h.id)) continue;
+      this.packagingInflight.add(h.id);
       const target = (h.terminal_target ?? 'done') as HandoffStatus;
       try {
         const runner = await this.runnerOf(h);
@@ -530,6 +538,7 @@ export class Worker {
       } catch (e) {
         setStatus(this.db, h, 'failed', `snapshot failed: ${msg(e)}`);
       } finally {
+        this.packagingInflight.delete(h.id);
         this.logCursors.delete(h.id);
         if (h.kind === 'web') await this.safeDeletePod(h, reasonOfTarget(target));
         else if (h.bot_id) {

@@ -234,14 +234,26 @@ describe('worker 全链路', () => {
     expect(getHandoff(db, 'hf-000014')!.status).toBe('running');
   });
 
-  it('bot 驻留期空闲 TTL：无活动超 idleTtl → expired', async () => {
+  it('bot 驻留期空闲 TTL：任务已完成 → 正常收尾 done（hf-c70fd4 回归）', async () => {
     insertRunningBot('hf-000012');
     backdateRunning('hf-000012', 130 * 60_000);
     runner.state.taskDone = true;
     runner.state.lastActivityAt = new Date(Date.now() - 121 * 60_000).toISOString(); // > 120min idleTtl
     await worker.tick();
-    expect(getHandoff(db, 'hf-000012')!.status).toBe('expired');
-    expect(getHandoff(db, 'hf-000012')!.error).toBe('idle ttl');
+    expect(getHandoff(db, 'hf-000012')!.status).toBe('done');
+    expect(getHandoff(db, 'hf-000012')!.error).toBeNull();
+  });
+
+  it('bot 无 task 纯交互驻留：空闲超 idleTtl → expired + idle ttl', async () => {
+    insertHandoff(db, { id: 'hf-000017', kind: 'bot', status: 'running' }); // 无 task
+    db.prepare('UPDATE handoffs SET pod_name=? WHERE id=?').run('ah-bot-x', 'hf-000017');
+    orch.pods.set('ah-bot-x', 'ready');
+    backdateRunning('hf-000017', 130 * 60_000);
+    runner.state.taskDone = false;
+    runner.state.lastActivityAt = new Date(Date.now() - 121 * 60_000).toISOString();
+    await worker.tick();
+    expect(getHandoff(db, 'hf-000017')!.status).toBe('expired');
+    expect(getHandoff(db, 'hf-000017')!.error).toBe('idle ttl');
   });
 
   it('bot task 未完成时不适用空闲 TTL：长静默操作合法，由 1440min 静默容忍负责（hf-5cb6ee 回归）', async () => {
@@ -330,11 +342,11 @@ describe('回收与恢复', () => {
     runner.state.taskDone = true;
     runner.state.lastActivityAt = new Date(Date.now() - 121 * 60_000).toISOString(); // > 120min idleTtl → 驻留期到期
     await worker.tick();
-    expect(getHandoff(db, 'hf-000016')!.status).toBe('expired');
+    expect(getHandoff(db, 'hf-000016')!.status).toBe('done'); // 任务已完成的驻留到期 = 正常收尾
     expect(orch.pods.has('ah-bot-x')).toBe(false); // 实例已回收，下次消息由 waker 唤醒
     expect((db.prepare('SELECT pod_name FROM bots WHERE id=1').get() as { pod_name: string | null }).pod_name).toBeNull();
     const sb = db.prepare("SELECT status, reclaim_reason FROM sandboxes WHERE pod_name='ah-bot-x'").get() as { status: string; reclaim_reason: string };
     expect(sb.status).toBe('reclaimed');
-    expect(sb.reclaim_reason).toBe('expired');
+    expect(sb.reclaim_reason).toBe('task-done');
   });
 });
